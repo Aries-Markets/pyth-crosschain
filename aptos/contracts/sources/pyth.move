@@ -563,6 +563,11 @@ module pyth::pyth_test {
 
     #[test(aptos_framework = @aptos_framework)]
     fun test_update_price_feeds_success(aptos_framework: &signer) {
+        setup_test_and_update_price(aptos_framework);
+    }
+
+    #[test_only]
+    public fun setup_test_and_update_price(aptos_framework: &signer) {
         let (burn_capability, mint_capability, coins) = setup_test(aptos_framework, 500, 1, x"5d1f252d5de865279b00c84bce362774c2804294ed53299bc4a0389a5defef92", data_sources_for_test_vaa(), 50, 100);
     
         // Update the price feeds from the VAA
