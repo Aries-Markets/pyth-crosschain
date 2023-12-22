@@ -416,7 +416,7 @@ module pyth::pyth_test {
 
         // Deploy and initialize a test instance of the Pyth contract
         let deployer = account::create_signer_with_capability(&
-            account::create_test_signer_cap(@0x277fa055b6a73c42c0662d5236c65c864ccbf2d4abd21f174a30c8b786eab84b));
+            account::create_test_signer_cap(@deployer));
         let (_pyth, signer_capability) = account::create_resource_account(&deployer, b"pyth");
         pyth::init_test(signer_capability, stale_price_threshold, governance_emitter_chain_id, governance_emitter_address, data_sources, update_fee);
     
