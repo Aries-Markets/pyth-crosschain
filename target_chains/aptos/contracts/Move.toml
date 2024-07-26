@@ -8,8 +8,8 @@ AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir 
 MoveStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/move-stdlib/", rev = "aptos-node-v1.16.3" }
 AptosStdlib = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-stdlib/", rev = "aptos-node-v1.16.3" }
 AptosToken = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-token/", rev = "aptos-node-v1.16.3" }
-Wormhole = { git = "https://github.com/Aries-Markets/wormhole.git", subdir = "aptos/wormhole", rev = "main" }
-Deployer = { git = "https://github.com/Aries-Markets/wormhole.git", subdir = "aptos/deployer", rev = "main" }
+Wormhole = { git = "https://github.com/Aries-Markets/wormhole.git", subdir = "aptos/wormhole", rev = "dev.v2" }
+Deployer = { git = "https://github.com/Aries-Markets/wormhole.git", subdir = "aptos/deployer", rev = "dev.v2" }
 
 [addresses]
 pyth = "_"
