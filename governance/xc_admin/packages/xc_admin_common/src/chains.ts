@@ -23,6 +23,11 @@ export const RECEIVER_CHAINS = {
   arbitrum: 23,
   optimism: 24,
 
+  // SVM chains
+  eclipse_devnet: 40001,
+  eclipse_testnet: 40002,
+  eclipse_mainnet: 40003,
+
   cronos: 60001,
   kcc: 60002,
   zksync: 60003,
@@ -173,6 +178,7 @@ export const RECEIVER_CHAINS = {
   movement_suzuka_testnet: 50089,
   b3_testnet: 50090,
   cronos_zkevm_testnet: 50091,
+  reya_testnet: 50092,
 };
 
 // If there is any overlapping value the receiver chain will replace the wormhole
