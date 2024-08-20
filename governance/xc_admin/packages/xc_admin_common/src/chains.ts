@@ -79,6 +79,8 @@ export const RECEIVER_CHAINS = {
   etherlink: 60055,
   klaytn: 60056,
   kinto: 60057,
+  b3_mainnet: 60058,
+  cronos_zkevm_mainnet: 60059,
 
   // Testnets as a separate chain ids (to use stable data sources and governance for them)
   injective_testnet: 60013,
@@ -179,6 +181,7 @@ export const RECEIVER_CHAINS = {
   b3_testnet: 50090,
   cronos_zkevm_testnet: 50091,
   reya_testnet: 50092,
+  movement_evm_devnet_imola: 50093,
 };
 
 // If there is any overlapping value the receiver chain will replace the wormhole
