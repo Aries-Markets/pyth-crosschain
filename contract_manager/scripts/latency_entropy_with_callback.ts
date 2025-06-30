@@ -1,25 +1,23 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import {
-  DefaultStore,
-  EvmEntropyContract,
-  PrivateKey,
-  toPrivateKey,
-} from "../src";
-import {
-  COMMON_DEPLOY_OPTIONS,
-  findEntropyContract,
-  findEvmChain,
-} from "./common";
-import Web3 from "web3";
+import { PrivateKey, toPrivateKey } from "../src/core/base";
+import { EvmChain } from "../src/core/chains";
+import { EvmEntropyContract } from "../src/core/contracts";
+import { DefaultStore } from "../src/node/utils/store";
+import { COMMON_DEPLOY_OPTIONS, findEntropyContract } from "./common";
 
 const parser = yargs(hideBin(process.argv))
   .usage(
     "Requests a random number from an entropy contract and measures the\n" +
       "latency between request submission and fulfillment by the Fortuna keeper service.\n" +
-      "Usage: $0 --private-key <private-key> --chain <chain-id> | --all-chains <testnet|mainnet>"
+      "Usage: $0 --private-key <private-key> --chain <chain-id> | --all-chains <testnet|mainnet>",
   )
   .options({
+    provider: {
+      type: "string",
+      desc: "Provider address to use for the request. Will use the default provider if not specified",
+      demandOption: false,
+    },
     chain: {
       type: "string",
       desc: "test latency for the contract on this chain",
@@ -36,15 +34,16 @@ const parser = yargs(hideBin(process.argv))
 
 async function testLatency(
   contract: EvmEntropyContract,
-  privateKey: PrivateKey
+  privateKey: PrivateKey,
+  provider?: string,
 ) {
-  const provider = await contract.getDefaultProvider();
+  provider = provider || (await contract.getDefaultProvider());
   const userRandomNumber = contract.generateUserRandomNumber();
   const requestResponse = await contract.requestRandomness(
     userRandomNumber,
     provider,
     privateKey,
-    true // with callback
+    true, // with callback
   );
   console.log(`Request tx hash  : ${requestResponse.transactionHash}`);
   // Read the sequence number for the request from the transaction events.
@@ -55,7 +54,7 @@ async function testLatency(
   const startTime = Date.now();
 
   const fromBlock = requestResponse.blockNumber;
-  const web3 = new Web3(contract.chain.getRpcUrl());
+  const web3 = contract.chain.getWeb3();
   const entropyContract = contract.getContract();
 
   // eslint-disable-next-line no-constant-condition
@@ -73,7 +72,7 @@ async function testLatency(
     });
 
     const event = events.find(
-      (event) => event.returnValues.request[1] == sequenceNumber
+      (event) => event.returnValues.request[1] == sequenceNumber,
     );
 
     if (event !== undefined) {
@@ -83,7 +82,7 @@ async function testLatency(
       console.log(
         `Revealed after   : ${
           currentBlock - requestResponse.blockNumber
-        } blocks`
+        } blocks`,
       );
       break;
     }
@@ -111,9 +110,9 @@ async function main() {
       }
     }
   } else if (argv.chain) {
-    const chain = findEvmChain(argv.chain);
+    const chain = DefaultStore.getChainOrThrow(argv.chain, EvmChain);
     const contract = findEntropyContract(chain);
-    await testLatency(contract, privateKey);
+    await testLatency(contract, privateKey, argv.provider);
   }
 }
 

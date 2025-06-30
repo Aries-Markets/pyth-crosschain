@@ -1,4 +1,4 @@
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 import * as options from "../options";
 import { readPriceConfigFile } from "../price-config";
 import fs from "fs";
@@ -8,7 +8,7 @@ import { Controller } from "../controller";
 import { Options } from "yargs";
 import { getNetworkInfo } from "@injectivelabs/networks";
 import pino from "pino";
-
+import { filterInvalidPriceItems } from "../utils";
 export default {
   command: "injective",
   describe: "run price pusher for injective",
@@ -27,8 +27,18 @@ export default {
       required: true,
     } as Options,
     "gas-price": {
-      description: "Gas price to be used for each transasction",
+      description: "Gas price to be used for each transaction",
       type: "number",
+    } as Options,
+    "gas-multiplier": {
+      description: "Gas multiplier to be used for each transaction",
+      type: "number",
+    } as Options,
+    "price-ids-process-chunk-size": {
+      description:
+        "Set in case we wanna split price feeds updates into chunks to have smaller transactions. Set to -1 to disable chunking.",
+      type: "number",
+      required: false,
     } as Options,
     ...options.priceConfigFile,
     ...options.priceServiceEndpoint,
@@ -37,24 +47,24 @@ export default {
     ...options.pollingFrequency,
     ...options.pushingFrequency,
     ...options.logLevel,
-    ...options.priceServiceConnectionLogLevel,
     ...options.controllerLogLevel,
   },
-  handler: function (argv: any) {
+  handler: async function (argv: any) {
     // FIXME: type checks for this
     const {
-      gasPrice,
-      grpcEndpoint,
-      priceConfigFile,
-      priceServiceEndpoint,
-      mnemonicFile,
-      pythContractAddress,
-      pushingFrequency,
-      pollingFrequency,
       network,
       logLevel,
-      priceServiceConnectionLogLevel,
+      gasPrice,
+      grpcEndpoint,
+      mnemonicFile,
+      gasMultiplier,
+      priceConfigFile,
+      pollingFrequency,
+      pushingFrequency,
       controllerLogLevel,
+      pythContractAddress,
+      priceServiceEndpoint,
+      priceIdsProcessChunkSize,
     } = argv;
 
     const logger = pino({ level: logLevel });
@@ -64,23 +74,29 @@ export default {
     }
 
     const priceConfigs = readPriceConfigFile(priceConfigFile);
-    const priceServiceConnection = new PriceServiceConnection(
-      priceServiceEndpoint,
-      {
-        logger: logger.child(
-          { module: "PriceServiceConnection" },
-          { level: priceServiceConnectionLogLevel }
-        ),
-      }
-    );
+    const hermesClient = new HermesClient(priceServiceEndpoint);
     const mnemonic = fs.readFileSync(mnemonicFile, "utf-8").trim();
 
-    const priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+    let priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+
+    // Better to filter out invalid price items before creating the pyth listener
+    const { existingPriceItems, invalidPriceItems } =
+      await filterInvalidPriceItems(hermesClient, priceItems);
+
+    if (invalidPriceItems.length > 0) {
+      logger.error(
+        `Invalid price id submitted for: ${invalidPriceItems
+          .map(({ alias }) => alias)
+          .join(", ")}`,
+      );
+    }
+
+    priceItems = existingPriceItems;
 
     const pythListener = new PythPriceListener(
-      priceServiceConnection,
+      hermesClient,
       priceItems,
-      logger.child({ module: "PythPriceListener" })
+      logger.child({ module: "PythPriceListener" }),
     );
 
     const injectiveListener = new InjectivePriceListener(
@@ -90,10 +106,10 @@ export default {
       logger.child({ module: "InjectivePriceListener" }),
       {
         pollingFrequency,
-      }
+      },
     );
     const injectivePusher = new InjectivePricePusher(
-      priceServiceConnection,
+      hermesClient,
       pythContractAddress,
       grpcEndpoint,
       logger.child({ module: "InjectivePricePusher" }),
@@ -101,7 +117,9 @@ export default {
       {
         chainId: getNetworkInfo(network).chainId,
         gasPrice,
-      }
+        gasMultiplier,
+        priceIdsProcessChunkSize,
+      },
     );
 
     const controller = new Controller(
@@ -110,7 +128,7 @@ export default {
       injectiveListener,
       injectivePusher,
       logger.child({ module: "Controller" }, { level: controllerLogLevel }),
-      { pushingFrequency }
+      { pushingFrequency },
     );
 
     controller.start();

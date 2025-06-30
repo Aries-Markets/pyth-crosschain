@@ -1,13 +1,18 @@
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 import fs from "fs";
 import { Options } from "yargs";
 import * as options from "../options";
 import { readPriceConfigFile } from "../price-config";
 import { PythPriceListener } from "../pyth-price-listener";
 import { Controller } from "../controller";
-import { EvmPriceListener, EvmPricePusher, PythContractFactory } from "./evm";
+import { EvmPriceListener, EvmPricePusher } from "./evm";
 import { getCustomGasStation } from "./custom-gas-station";
 import pino from "pino";
+import { createClient } from "./super-wallet";
+import { createPythContract } from "./pyth-contract";
+import { isWsEndpoint, filterInvalidPriceItems } from "../utils";
+import { PricePusherMetrics } from "../metrics";
+import { createEvmBalanceTracker } from "./balance-tracker";
 
 export default {
   command: "evm",
@@ -58,6 +63,11 @@ export default {
       type: "number",
       required: false,
     } as Options,
+    "gas-price": {
+      description: "Override the gas price that would be received from the RPC",
+      type: "number",
+      required: false,
+    } as Options,
     "update-fee-multiplier": {
       description:
         "Multiplier for the fee to update the price. It is useful in networks " +
@@ -74,10 +84,11 @@ export default {
     ...options.pollingFrequency,
     ...options.pushingFrequency,
     ...options.logLevel,
-    ...options.priceServiceConnectionLogLevel,
     ...options.controllerLogLevel,
+    ...options.enableMetrics,
+    ...options.metricsPort,
   },
-  handler: function (argv: any) {
+  handler: async function (argv: any) {
     // FIXME: type checks for this
     const {
       endpoint,
@@ -92,69 +103,91 @@ export default {
       overrideGasPriceMultiplier,
       overrideGasPriceMultiplierCap,
       gasLimit,
+      gasPrice,
       updateFeeMultiplier,
       logLevel,
-      priceServiceConnectionLogLevel,
       controllerLogLevel,
+      enableMetrics,
+      metricsPort,
     } = argv;
 
-    const logger = pino({ level: logLevel });
+    const logger = pino({
+      level: logLevel,
+    });
 
     const priceConfigs = readPriceConfigFile(priceConfigFile);
-    const priceServiceConnection = new PriceServiceConnection(
-      priceServiceEndpoint,
-      {
-        logger: logger.child(
-          { module: "PriceServiceConnection" },
-          { level: priceServiceConnectionLogLevel }
-        ),
-      }
-    );
+    const hermesClient = new HermesClient(priceServiceEndpoint);
 
     const mnemonic = fs.readFileSync(mnemonicFile, "utf-8").trim();
 
-    const priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+    let priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+
+    // Better to filter out invalid price items before creating the pyth listener
+    const { existingPriceItems, invalidPriceItems } =
+      await filterInvalidPriceItems(hermesClient, priceItems);
+
+    if (invalidPriceItems.length > 0) {
+      logger.error(
+        `Invalid price id submitted for: ${invalidPriceItems
+          .map(({ alias }) => alias)
+          .join(", ")}`,
+      );
+    }
+
+    priceItems = existingPriceItems;
+
+    // Initialize metrics if enabled
+    let metrics: PricePusherMetrics | undefined;
+    if (enableMetrics) {
+      metrics = new PricePusherMetrics(logger.child({ module: "Metrics" }));
+      metrics.start(metricsPort);
+      logger.info(`Metrics server started on port ${metricsPort}`);
+    }
 
     const pythListener = new PythPriceListener(
-      priceServiceConnection,
+      hermesClient,
       priceItems,
-      logger.child({ module: "PythPriceListener" })
+      logger.child({ module: "PythPriceListener" }),
     );
 
-    const pythContractFactory = new PythContractFactory(
-      endpoint,
-      mnemonic,
-      pythContractAddress
-    );
+    const client = await createClient(endpoint, mnemonic);
+    const pythContract = createPythContract(client, pythContractAddress);
+
     logger.info(
-      `Pushing updates from wallet address: ${pythContractFactory
-        .createWeb3PayerProvider()
-        .getAddress()}`
+      `Pushing updates from wallet address: ${client.account.address}`,
     );
+
+    // It is possible to watch the events in the non-ws endpoints, either by getFilter
+    // or by getLogs, but it is very expensive and our polling mechanism does it
+    // in a more efficient way. So we only do it with ws endpoints.
+    const watchEvents = isWsEndpoint(endpoint);
 
     const evmListener = new EvmPriceListener(
-      pythContractFactory,
+      pythContract,
       priceItems,
+      watchEvents,
       logger.child({ module: "EvmPriceListener" }),
       {
         pollingFrequency,
-      }
+      },
     );
 
     const gasStation = getCustomGasStation(
       logger.child({ module: "CustomGasStation" }),
       customGasStation,
-      txSpeed
+      txSpeed,
     );
     const evmPusher = new EvmPricePusher(
-      priceServiceConnection,
-      pythContractFactory,
+      hermesClient,
+      client,
+      pythContract,
       logger.child({ module: "EvmPricePusher" }),
       overrideGasPriceMultiplier,
       overrideGasPriceMultiplierCap,
       updateFeeMultiplier,
       gasLimit,
-      gasStation
+      gasStation,
+      gasPrice,
     );
 
     const controller = new Controller(
@@ -163,9 +196,27 @@ export default {
       evmListener,
       evmPusher,
       logger.child({ module: "Controller" }, { level: controllerLogLevel }),
-      { pushingFrequency }
+      {
+        pushingFrequency,
+        metrics,
+      },
     );
 
-    controller.start();
+    // Create and start the balance tracker if metrics are enabled
+    if (metrics) {
+      const balanceTracker = createEvmBalanceTracker({
+        client,
+        address: client.account.address,
+        network: await client.getChainId().then((id) => id.toString()),
+        updateInterval: pushingFrequency,
+        metrics,
+        logger,
+      });
+
+      // Start the balance tracker
+      await balanceTracker.start();
+    }
+
+    await controller.start();
   },
 };

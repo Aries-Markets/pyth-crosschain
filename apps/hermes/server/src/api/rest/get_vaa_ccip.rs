@@ -1,35 +1,16 @@
 use {
-    super::verify_price_ids_exist,
+    super::validate_price_ids,
     crate::{
-        api::{
-            rest::RestError,
-            ApiState,
-        },
-        state::aggregate::{
-            Aggregates,
-            RequestTime,
-            UnixTimestamp,
-        },
+        api::{rest::RestError, ApiState},
+        state::aggregate::{Aggregates, RequestTime, UnixTimestamp},
     },
     anyhow::Result,
-    axum::{
-        extract::State,
-        Json,
-    },
-    derive_more::{
-        Deref,
-        DerefMut,
-    },
+    axum::{extract::State, Json},
+    derive_more::{Deref, DerefMut},
     pyth_sdk::PriceIdentifier,
-    serde::{
-        Deserialize,
-        Serialize,
-    },
+    serde::{Deserialize, Serialize},
     serde_qs::axum::QsQuery,
-    utoipa::{
-        IntoParams,
-        ToSchema,
-    },
+    utoipa::{IntoParams, ToSchema},
 };
 
 #[derive(Clone, Debug, Deref, DerefMut, Deserialize, Serialize, ToSchema)]
@@ -70,15 +51,16 @@ pub async fn get_vaa_ccip<S>(
 where
     S: Aggregates,
 {
+    let data: [u8; 40] = *params.data;
     let price_id: PriceIdentifier = PriceIdentifier::new(
-        params.data[0..32]
+        data[0..32]
             .try_into()
             .map_err(|_| RestError::InvalidCCIPInput)?,
     );
-    verify_price_ids_exist(&state, &[price_id]).await?;
+    validate_price_ids(&state, &[price_id], false).await?;
 
     let publish_time = UnixTimestamp::from_be_bytes(
-        params.data[32..40]
+        data[32..40]
             .try_into()
             .map_err(|_| RestError::InvalidCCIPInput)?,
     );

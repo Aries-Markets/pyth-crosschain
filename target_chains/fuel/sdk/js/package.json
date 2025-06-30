@@ -1,6 +1,6 @@
 {
   "name": "@pythnetwork/pyth-fuel-js",
-  "version": "1.0.4",
+  "version": "1.0.7",
   "description": "Pyth Network Fuel Utils in JS",
   "homepage": "https://pyth.network",
   "author": {
@@ -22,12 +22,14 @@
   "scripts": {
     "usage-example": "ts-node src/examples/usage.ts",
     "build": "pnpm run generate-fuel-types && tsc && copyfiles -u 1 \"src/**/*.d.ts\" lib",
-    "format": "prettier --write \"src/**/*.ts\"",
-    "lint": "eslint src/",
-    "prepublishOnly": "pnpm run build && pnpm run lint",
-    "preversion": "pnpm run lint",
-    "version": "pnpm run format && git add -A src",
-    "generate-fuel-types": "pnpm fuels typegen -i ../../contracts/pyth-contract/out/release/*-abi.json -o ./src/types && prettier --write \"./src/types/**/*.ts\""
+    "test:format": "prettier --check \"src/**/*.ts\"",
+    "test:lint": "eslint src/ --max-warnings 0",
+    "fix:format": "prettier --write \"src/**/*.ts\"",
+    "fix:lint": "eslint src/ --fix --max-warnings 0",
+    "prepublishOnly": "pnpm run build && pnpm run test:lint",
+    "preversion": "pnpm run test:lint",
+    "version": "pnpm run test:format && git add -A src",
+    "generate-fuel-types": "pnpm fuels typegen -i ../../contracts/pyth-contract/out/release/*-abi.json -o ./src/types && pnpm run fix:format"
   },
   "keywords": [
     "pyth",
@@ -35,15 +37,17 @@
   ],
   "license": "Apache-2.0",
   "devDependencies": {
+    "@pythnetwork/hermes-client": "workspace:*",
+    "@types/node": "catalog:",
     "@typescript-eslint/eslint-plugin": "^7.7.0",
     "@typescript-eslint/parser": "^7.7.0",
     "copyfiles": "^2.4.1",
     "eslint": "^8.14.0",
-    "prettier": "^2.6.2",
-    "ts-node": "^10.9.2",
-    "typescript": "^5.4.5"
+    "prettier": "catalog:",
+    "ts-node": "catalog:",
+    "typescript": "catalog:"
   },
   "dependencies": {
-    "fuels": "^0.92.1"
+    "fuels": "^0.96.1"
   }
 }

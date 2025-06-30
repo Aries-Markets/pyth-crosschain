@@ -12,7 +12,7 @@ export default {
   redirects: async () => [
     {
       source: "/price-feeds/evm",
-      destination: "/price-feeds/evm/parsePriceFeedUpdates",
+      destination: "/price-feeds/evm/getPriceNoOlderThan",
       permanent: false,
     },
   ],
@@ -28,8 +28,6 @@ export default {
 
     return config;
   },
-
-  transpilePackages: ["@pythnetwork/*"],
 
   headers: () => [
     {

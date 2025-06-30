@@ -1,20 +1,10 @@
 use {
     crate::{
         config::RunOptions,
-        state::{
-            Aggregates,
-            Benchmarks,
-            Cache,
-            Metrics,
-        },
+        state::{Aggregates, Benchmarks, Cache, Metrics},
     },
     anyhow::Result,
-    axum::{
-        extract::Extension,
-        middleware::from_fn_with_state,
-        routing::get,
-        Router,
-    },
+    axum::{extract::Extension, middleware::from_fn_with_state, routing::get, Router},
     ipnet::IpNet,
     serde_qs::axum::QsQueryConfig,
     std::sync::Arc,
@@ -30,8 +20,8 @@ pub mod types;
 mod ws;
 
 pub struct ApiState<S> {
-    pub state:   Arc<S>,
-    pub ws:      Arc<ws::WsState>,
+    pub state: Arc<S>,
+    pub ws: Arc<ws::WsState>,
     pub metrics: Arc<metrics_middleware::ApiMetrics>,
 }
 
@@ -40,8 +30,8 @@ pub struct ApiState<S> {
 impl<S> Clone for ApiState<S> {
     fn clone(&self) -> Self {
         Self {
-            state:   self.state.clone(),
-            ws:      self.ws.clone(),
+            state: self.state.clone(),
+            ws: self.ws.clone(),
             metrics: self.metrics.clone(),
         }
     }
@@ -111,6 +101,8 @@ where
             rest::latest_vaas,
             rest::price_feed_ids,
             rest::latest_price_updates,
+            rest::latest_twaps,
+            rest::latest_publisher_stake_caps,
             rest::timestamp_price_updates,
             rest::price_feeds_metadata,
             rest::price_stream_sse_handler,
@@ -127,11 +119,16 @@ where
                 types::RpcPriceIdentifier,
                 types::EncodingType,
                 types::PriceUpdate,
-                types::BinaryPriceUpdate,
+                types::BinaryUpdate,
                 types::ParsedPriceUpdate,
                 types::RpcPriceFeedMetadataV2,
                 types::PriceFeedMetadata,
-                types::AssetType
+                types::LatestPublisherStakeCapsUpdateDataResponse,
+                types::ParsedPublisherStakeCapsUpdate,
+                types::ParsedPublisherStakeCap,
+                types::AssetType,
+                types::TwapsResponse,
+                types::ParsedPriceFeedTwap,
             )
         ),
         tags(
@@ -143,7 +140,7 @@ where
     // Initialize Axum Router. Note the type here is a `Router<State>` due to the use of the
     // `with_state` method which replaces `Body` with `State` in the type signature.
     let app = Router::new();
-    #[allow(deprecated)]
+    #[allow(deprecated, reason = "serving deprecated API endpoints")]
     let app = app
         .merge(SwaggerUi::new("/docs").url("/docs/openapi.json", ApiDoc::openapi()))
         .route("/", get(rest::index))
@@ -158,6 +155,19 @@ where
             get(rest::price_stream_sse_handler),
         )
         .route("/v2/updates/price/latest", get(rest::latest_price_updates))
+        .route(
+            "/v2/updates/twap/:window_seconds/latest",
+            get(rest::latest_twaps),
+        )
+        // TODO(Tejas)
+        // .route(
+        //     "/v2/updates/twap/:window_seconds/:publish_time",
+        //     get(rest::latest_twaps),
+        // )
+        .route(
+            "/v2/updates/publisher_stake_caps/latest",
+            get(rest::latest_publisher_stake_caps),
+        )
         .route(
             "/v2/updates/price/:publish_time",
             get(rest::timestamp_price_updates),

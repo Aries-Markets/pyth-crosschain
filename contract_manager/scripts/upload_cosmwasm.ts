@@ -1,13 +1,13 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { CosmWasmChain } from "../src/chains";
-import { CosmWasmPriceFeedContract } from "../src/contracts/cosmwasm";
-import { DefaultStore } from "../src/store";
-import { toPrivateKey } from "../src";
+import { CosmWasmChain } from "../src/core/chains";
+import { CosmWasmPriceFeedContract } from "../src/core/contracts";
+import { DefaultStore } from "../src/node/utils/store";
+import { toPrivateKey } from "../src/core/base";
 
 const parser = yargs(hideBin(process.argv))
   .usage(
-    "Usage: $0 --code <path/to/artifact.wasm> --private-key <private-key> --chain <chain>"
+    "Usage: $0 --code <path/to/artifact.wasm> --private-key <private-key> --chain <chain>",
   )
   .options({
     code: {
@@ -33,7 +33,7 @@ async function main() {
   const { codeId } = await CosmWasmPriceFeedContract.storeCode(
     DefaultStore.chains[argv.chain] as CosmWasmChain,
     toPrivateKey(argv["private-key"]),
-    code
+    code,
   );
   console.log(`Successfully uploaded code with id ${codeId}`);
 }

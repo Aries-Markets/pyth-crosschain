@@ -2,10 +2,7 @@ use {
     super::State,
     prometheus_client::{
         encoding::text::encode,
-        registry::{
-            Metric,
-            Registry,
-        },
+        registry::{Metric, Registry},
     },
     tokio::sync::RwLock,
 };
@@ -54,7 +51,10 @@ where
     async fn encode(&self) -> String {
         let registry = self.into().registry.read().await;
         let mut buffer = String::new();
-        encode(&mut buffer, &registry).unwrap();
+        if let Err(err) = encode(&mut buffer, &registry) {
+            tracing::error!("failed to encode metrics: {err}");
+            return String::new();
+        }
         buffer
     }
 }

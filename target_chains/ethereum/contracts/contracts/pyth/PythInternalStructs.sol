@@ -9,10 +9,30 @@ import "@pythnetwork/pyth-sdk-solidity/PythStructs.sol";
 contract PythInternalStructs {
     using BytesLib for bytes;
 
-    struct ParseConfig {
-        uint64 minPublishTime;
-        uint64 maxPublishTime;
+    /// Internal struct to hold parameters for update processing
+    /// @dev Storing these variable in a struct rather than local variables
+    /// helps reduce stack depth when passing arguments to functions.
+    struct UpdateParseContext {
+        bytes32[] priceIds;
+        uint64 minAllowedPublishTime;
+        uint64 maxAllowedPublishTime;
         bool checkUniqueness;
+        /// When checkUpdateDataIsMinimal is true, parsing will revert
+        /// if the number of passed in updates exceeds or is less than
+        /// the length of priceIds.
+        bool checkUpdateDataIsMinimal;
+        PythStructs.PriceFeed[] priceFeeds;
+        uint64[] slots;
+    }
+
+    /// The initial Merkle header data in an AccumulatorUpdate. The encoded bytes
+    /// are kept in calldata for gas efficiency.
+    /// @dev Storing these variable in a struct rather than local variables
+    /// helps reduce stack depth when passing arguments to functions.
+    struct MerkleData {
+        bytes20 digest;
+        uint8 numUpdates;
+        uint64 slot;
     }
 
     struct PriceInfo {

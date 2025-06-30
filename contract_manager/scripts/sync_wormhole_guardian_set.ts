@@ -1,12 +1,14 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import {
+  AptosWormholeContract,
   CosmWasmPriceFeedContract,
-  DefaultStore,
   EvmPriceFeedContract,
+  IotaWormholeContract,
   SuiWormholeContract,
-  toPrivateKey,
-} from "../src";
+} from "../src/core/contracts";
+import { DefaultStore } from "../src/node/utils/store";
+import { toPrivateKey } from "../src/core/base";
 
 const parser = yargs(hideBin(process.argv))
   .usage("Update the guardian set in stable networks. Usage: $0")
@@ -29,7 +31,11 @@ async function main() {
   const chains = argv.chain;
 
   for (const contract of Object.values(DefaultStore.wormhole_contracts)) {
-    if (contract instanceof SuiWormholeContract) {
+    if (
+      contract instanceof SuiWormholeContract ||
+      contract instanceof IotaWormholeContract ||
+      contract instanceof AptosWormholeContract
+    ) {
       if (chains && !chains.includes(contract.getChain().getId())) {
         continue;
       }
@@ -73,7 +79,7 @@ async function main() {
         // }
 
         console.log(
-          `Current Guardianset for ${contract.getId()}: ${await wormhole.getCurrentGuardianSetIndex()}`
+          `Current Guardianset for ${contract.getId()}: ${await wormhole.getCurrentGuardianSetIndex()}`,
         );
 
         await wormhole.syncMainnetGuardianSets(privateKey);

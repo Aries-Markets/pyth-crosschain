@@ -1,6 +1,6 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DefaultStore } from "../src";
+import { DefaultStore } from "../src/node/utils/store";
 
 function deserializeCommitmentMetadata(data: Buffer) {
   const seed = Uint8Array.from(data.subarray(0, 32));
@@ -39,12 +39,12 @@ async function main() {
 
     const commitmentMetadata = providerInfo.commitmentMetadata.replace(
       "0x",
-      ""
+      "",
     );
 
     // const binaryData = hexToBytes(commitmentMetadata);
     const metadata = deserializeCommitmentMetadata(
-      Buffer.from(commitmentMetadata, "hex")
+      Buffer.from(commitmentMetadata, "hex"),
     );
     console.log("=".repeat(100));
     console.log(`Fetched info for ${contract.getId()}`);
@@ -56,7 +56,7 @@ async function main() {
     console.log(`chainLength       : ${metadata.chainLength}`);
     console.log(`seed              : [${metadata.seed}]`);
     console.log(
-      `original seq no   : ${providerInfo.originalCommitmentSequenceNumber}`
+      `original seq no   : ${providerInfo.originalCommitmentSequenceNumber}`,
     );
   }
 }

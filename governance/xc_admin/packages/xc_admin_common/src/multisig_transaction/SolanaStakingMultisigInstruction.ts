@@ -1,4 +1,9 @@
-import { TransactionInstruction } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  StakeProgram,
+  TransactionInstruction,
+} from "@solana/web3.js";
 import {
   MultisigInstruction,
   MultisigInstructionProgram,
@@ -6,6 +11,7 @@ import {
 } from ".";
 import { AnchorAccounts } from "./anchor";
 import { StakeInstruction } from "@solana/web3.js";
+import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
 
 export class SolanaStakingMultisigInstruction implements MultisigInstruction {
   readonly program = MultisigInstructionProgram.SolanaStakingProgram;
@@ -16,7 +22,7 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
   constructor(
     name: string,
     args: { [key: string]: any },
-    accounts: AnchorAccounts
+    accounts: AnchorAccounts,
   ) {
     this.name = name;
     this.args = args;
@@ -24,7 +30,7 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
   }
 
   static fromTransactionInstruction(
-    instruction: TransactionInstruction
+    instruction: TransactionInstruction,
   ): SolanaStakingMultisigInstruction {
     try {
       const type = StakeInstruction.decodeInstructionType(instruction);
@@ -49,7 +55,7 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
                 },
               },
               remaining: [],
-            }
+            },
           );
         case "Delegate":
           const decodedDelegate = StakeInstruction.decodeDelegate(instruction);
@@ -75,7 +81,7 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
                 },
               },
               remaining: [],
-            }
+            },
           );
         case "Initialize":
           const decodedInitialize =
@@ -95,7 +101,7 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
                 },
               },
               remaining: [],
-            }
+            },
           );
         case "Authorize":
         case "AuthorizeWithSeed":
@@ -110,8 +116,49 @@ export class SolanaStakingMultisigInstruction implements MultisigInstruction {
       return new SolanaStakingMultisigInstruction(
         UNRECOGNIZED_INSTRUCTION,
         { data: instruction.data },
-        { named: {}, remaining: instruction.keys }
+        { named: {}, remaining: instruction.keys },
       );
     }
   }
+}
+
+export async function fetchStakeAccounts(
+  connection: Connection,
+  staker: PublicKey,
+  voterAccount: PublicKey,
+) {
+  const stakeAccounts = await connection.getProgramAccounts(
+    StakeProgram.programId,
+    {
+      encoding: "base64",
+      filters: [
+        {
+          memcmp: {
+            offset: 0,
+            bytes: bs58.encode(Buffer.from([2, 0, 0, 0])),
+          },
+        },
+        {
+          memcmp: {
+            offset: 12,
+            bytes: staker.toBase58(),
+          },
+        },
+        {
+          memcmp: {
+            offset: 124,
+            bytes: voterAccount.toBase58(),
+          },
+        },
+        {
+          memcmp: {
+            offset: 172,
+            bytes: bs58.encode(Buffer.from("ff".repeat(8), "hex")), // account is active
+          },
+        },
+      ],
+    },
+  );
+
+  return stakeAccounts.map((account) => account.pubkey);
 }

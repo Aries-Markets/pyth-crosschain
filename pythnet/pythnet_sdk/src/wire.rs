@@ -12,18 +12,9 @@ mod prefixed_vec;
 mod ser;
 
 pub use {
-    de::{
-        from_slice,
-        Deserializer,
-        DeserializerError,
-    },
+    de::{from_slice, Deserializer, DeserializerError},
     prefixed_vec::PrefixedVec,
-    ser::{
-        to_vec,
-        to_writer,
-        Serializer,
-        SerializerError,
-    },
+    ser::{to_vec, to_writer, Serializer, SerializerError},
 };
 
 // Proof Format (V1)
@@ -35,19 +26,11 @@ pub mod v1 {
     use {
         super::*,
         crate::{
-            accumulators::merkle::MerklePath,
-            error::Error,
-            hashers::keccak256_160::Keccak160,
+            accumulators::merkle::MerklePath, error::Error, hashers::keccak256_160::Keccak160,
             require,
         },
-        borsh::{
-            BorshDeserialize,
-            BorshSerialize,
-        },
-        serde::{
-            Deserialize,
-            Serialize,
-        },
+        borsh::{BorshDeserialize, BorshSerialize},
+        serde::{Deserialize, Serialize},
     };
     pub const PYTHNET_ACCUMULATOR_UPDATE_MAGIC: &[u8; 4] = b"PNAU";
     pub const CURRENT_MINOR_VERSION: u8 = 0;
@@ -58,11 +41,11 @@ pub mod v1 {
     // to target chains).
     #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
     pub struct AccumulatorUpdateData {
-        magic:         [u8; 4],
+        magic: [u8; 4],
         major_version: u8,
         minor_version: u8,
-        trailing:      Vec<u8>,
-        pub proof:     Proof,
+        trailing: Vec<u8>,
+        pub proof: Proof,
     }
 
     impl AccumulatorUpdateData {
@@ -84,10 +67,13 @@ pub mod v1 {
                 Error::InvalidMagic
             );
             require!(message.major_version == 1, Error::InvalidVersion);
-            require!(
-                message.minor_version >= CURRENT_MINOR_VERSION,
-                Error::InvalidVersion
-            );
+            #[allow(clippy::absurd_extreme_comparisons)]
+            {
+                require!(
+                    message.minor_version >= CURRENT_MINOR_VERSION,
+                    Error::InvalidVersion
+                );
+            }
             Ok(message)
         }
     }
@@ -98,7 +84,7 @@ pub mod v1 {
     #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
     pub enum Proof {
         WormholeMerkle {
-            vaa:     PrefixedVec<u16, u8>,
+            vaa: PrefixedVec<u16, u8>,
             updates: Vec<MerklePriceUpdate>,
         },
     }
@@ -108,12 +94,12 @@ pub mod v1 {
     )]
     pub struct MerklePriceUpdate {
         pub message: PrefixedVec<u16, u8>,
-        pub proof:   MerklePath<Keccak160>,
+        pub proof: MerklePath<Keccak160>,
     }
 
     #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
     pub struct WormholeMessage {
-        pub magic:   [u8; 4],
+        pub magic: [u8; 4],
         pub payload: WormholePayload,
     }
 
@@ -145,23 +131,21 @@ pub mod v1 {
 
     #[derive(Clone, Debug, Hash, PartialEq, Serialize, Deserialize)]
     pub struct WormholeMerkleRoot {
-        pub slot:      u64,
+        pub slot: u64,
         pub ring_size: u32,
-        pub root:      Hash,
+        pub root: Hash,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::wire::{
-        array,
-        v1::{
-            AccumulatorUpdateData,
-            Proof,
+    use crate::{
+        messages::Message,
+        wire::{
+            array, from_slice,
+            v1::{AccumulatorUpdateData, Proof},
+            Deserializer, PrefixedVec, Serializer,
         },
-        Deserializer,
-        PrefixedVec,
-        Serializer,
     };
 
     // Test the arbitrary fixed sized array serialization implementation.
@@ -230,41 +214,41 @@ mod tests {
             t_bool: bool,
 
             // Test integer serializations.
-            t_u8:  u8,
+            t_u8: u8,
             t_u16: u16,
             t_u32: u32,
             t_u64: u64,
 
             // Test `str` is serialized to a variable length array.
             t_string: String,
-            t_str:    &'a str,
+            t_str: &'a str,
 
             // Test `Vec` is serialized to a variable length array.
-            t_vec:              Vec<u8>,
-            t_vec_empty:        Vec<u8>,
-            t_vec_nested:       Vec<Vec<u8>>,
+            t_vec: Vec<u8>,
+            t_vec_empty: Vec<u8>,
+            t_vec_nested: Vec<Vec<u8>>,
             t_vec_nested_empty: Vec<Vec<u8>>,
-            t_slice:            &'a [u8],
-            t_slice_empty:      &'a [u8],
+            t_slice: &'a [u8],
+            t_slice_empty: &'a [u8],
 
             // Test tuples serialize as expected.
-            t_tuple:        (u8, u16, u32, u64, String, Vec<u8>, &'a [u8]),
+            t_tuple: (u8, u16, u32, u64, String, Vec<u8>, &'a [u8]),
             t_tuple_nested: ((u8, u16), (u32, u64)),
 
             // Test enum serializations.
-            t_enum_unit:    GoldenEnum,
+            t_enum_unit: GoldenEnum,
             t_enum_newtype: GoldenEnum,
-            t_enum_tuple:   GoldenEnum,
-            t_enum_struct:  GoldenEnum,
+            t_enum_tuple: GoldenEnum,
+            t_enum_struct: GoldenEnum,
 
             // Test nested structs, which includes our PrefixedVec implementations work as we expect.
-            t_struct:   GoldenNested<u8>,
+            t_struct: GoldenNested<u8>,
             t_prefixed: PrefixedVec<u16, u8>,
         }
 
         #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
         struct GoldenNested<T> {
-            nested_u8:    T,
+            nested_u8: T,
             nested_tuple: (u8, u8),
         }
 
@@ -278,21 +262,21 @@ mod tests {
 
         // Serialize the golden test value.
         let golden_struct = GoldenStruct {
-            unit:               (),
-            t_bool:             true,
-            t_u8:               1,
-            t_u16:              2,
-            t_u32:              3,
-            t_u64:              4,
-            t_string:           "9".to_string(),
-            t_str:              "10",
-            t_vec:              vec![11, 12, 13],
-            t_vec_empty:        vec![],
-            t_vec_nested:       vec![vec![14, 15, 16], vec![17, 18, 19]],
+            unit: (),
+            t_bool: true,
+            t_u8: 1,
+            t_u16: 2,
+            t_u32: 3,
+            t_u64: 4,
+            t_string: "9".to_string(),
+            t_str: "10",
+            t_vec: vec![11, 12, 13],
+            t_vec_empty: vec![],
+            t_vec_nested: vec![vec![14, 15, 16], vec![17, 18, 19]],
             t_vec_nested_empty: vec![vec![], vec![]],
-            t_slice:            &[20, 21, 22],
-            t_slice_empty:      &[],
-            t_tuple:            (
+            t_slice: &[20, 21, 22],
+            t_slice_empty: &[],
+            t_tuple: (
                 29,
                 30,
                 31,
@@ -301,16 +285,16 @@ mod tests {
                 vec![35, 36, 37],
                 &[38, 39, 40],
             ),
-            t_tuple_nested:     ((41, 42), (43, 44)),
-            t_enum_unit:        GoldenEnum::Unit,
-            t_enum_newtype:     GoldenEnum::Newtype(45),
-            t_enum_tuple:       GoldenEnum::Tuple(46, 47),
-            t_enum_struct:      GoldenEnum::Struct { a: 48, b: 49 },
-            t_struct:           GoldenNested {
-                nested_u8:    50,
+            t_tuple_nested: ((41, 42), (43, 44)),
+            t_enum_unit: GoldenEnum::Unit,
+            t_enum_newtype: GoldenEnum::Newtype(45),
+            t_enum_tuple: GoldenEnum::Tuple(46, 47),
+            t_enum_struct: GoldenEnum::Struct { a: 48, b: 49 },
+            t_struct: GoldenNested {
+                nested_u8: 50,
                 nested_tuple: (51, 52),
             },
-            t_prefixed:         vec![0u8; 512].into(),
+            t_prefixed: vec![0u8; 512].into(),
         };
 
         golden_struct.serialize(&mut serializer).unwrap();
@@ -501,7 +485,7 @@ mod tests {
         use serde::Serialize;
         // Serialize an empty update into a buffer.
         let empty_update = AccumulatorUpdateData::new(Proof::WormholeMerkle {
-            vaa:     PrefixedVec::from(vec![]),
+            vaa: PrefixedVec::from(vec![]),
             updates: vec![],
         });
         let mut buffer = Vec::new();
@@ -523,7 +507,7 @@ mod tests {
         // Serialize an empty update into a buffer.
 
         let empty_update = AccumulatorUpdateData::new(Proof::WormholeMerkle {
-            vaa:     PrefixedVec::from(vec![]),
+            vaa: PrefixedVec::from(vec![]),
             updates: vec![],
         });
         let mut buffer = Vec::new();
@@ -538,5 +522,21 @@ mod tests {
         // Test if bumping major version makes it incompatible
         buffer[4] = 0x03;
         AccumulatorUpdateData::try_from_slice(&buffer).unwrap_err();
+    }
+
+    // Test a real message for the accumulator update. Apart from testing it's quite useful for debugging.
+    #[test]
+    fn test_accumulator_fixture() {
+        let update = "504e41550100000003b801000000040d0039e043cb20b7fa5bc764e470b91e7f5f21658cdb76d27d83a592bcee4e756c9c43522b152b2a40c7f05d165d67e4916ad62386ba902d7e88753ca1168873d2600102dd5fcf0c759235eb74f188b5631e6e090e66620d764db504c8ca7cfd3740a668345f71052f48f5604badb6dfd0a5a3ece87e70fad9cb29919683d32e811d0deb010392ec1f1d4e0dcdc8acc8bef450e14b93daf133018bf3789bb1baedd008e1e6bc53f9cb0d83544da4ddff2ed1bd8c7b3dfb6e96ea40f9fb6d9c6c881caf40ed7901040801d6dcbc18f7706370cc511328777f7b61688368c299fdd4abe38860572281461b54cc6b124b8bdaeed12637b4832e46eede678b3dc835eae1149a9ff04ef000067db45bbd2584875d8989563debaf5146382764fee5b872f02e2facd637e68e274403499bfd5891fdc55e0277577bda68693e3c714e2c735f4fb2023dd5c5f19900087a494a169ede6ab8b67a639a2eefeabdbaa43f36319961ae5f683244a4913dfc03959824f8213ea8a9fb47b59d47524c8ba9e853fb3198f0c3302bf60075dde3010aa1c9e7fb618fc05077f9efc29d35e19c01ea4d18816440c8a2d3c1aad1b70bec3a10d35cc23931920e4b7adcfd698ab7a892cc9de1cd9ac11d7af120b92fbd78010b32548b109e22f5b9c8efdd896c5d31094d526b0f083b76022587f55211557e0323f02959b0f03370a6a76aca522aceef623b5767dbfa38a4135c5815687043d0010ca0aaf29729f468deda49cb972d1205f4c87c2b0ea46ca2b3c93f70698ff4d70469a188c3c6a0bc884c1b60d3d3d0e849e0adbfa849442e44a20042851bb52c75000dcf7faa0c86813ebe002e41956d8f5b809f61e2a4bc6a6633f482b51ee0d32ae62bc2330155ef00abcfeea44527be8312da5d50a8b7235f4edf15f796d5518ec3010fcf77947c5119fac256ae85c209672f158563d312a6bb74b613aaa94bab9846c9528f8f13f8621024e3d12b93538856c06d16512095a47ae26e63954446ac68330110bbb705d5357a1d78b26446a5de6501da28e7c19fb43ef9f56d43f341c72c362e577c61cdbe8d83fc38fd31874e86ebc9d6f1dee1fbba87ac49aa8c55bf4d95660011785631988bc90b35d3c45229030b46c1ac5181637102e5c2a46cdb25be0f5fa5267ccb390ee44235c91aaf1a0e5f442167a0f710c4d9830c48ae8c9558ae96550167edb5da00000000001ae101faedac5851e32b9b23b5f9411a8c2bac4aae3ed4dd7b811dd1a72ea4aa71000000000759b33f014155575600000000000c66fad50000271030c91600a5e258569a690c96d59f013978c7897601005500879551021853eec7a7dc827578e8e69da7e4fa8148339aa0d3d5296405be4b1a00000000393d2ba80000000000a82f9afffffff80000000067edb5da0000000067edb5da000000003cf06b08000000000024b7510cf5d9c5eb9e3032d750d0b65dedd7527449e4187c6ea25cb08d65341198760d09b01db92364e60efa1758472f0130bc041ad1f711e373a6ffa23d69abff34d6b927acd5e1617cac4fba36bfc75da71daf9cd01698dfb623063e58bb20ff0c9d1752460efb4c6f961e46a35bf9540e01e6e46cd2090072d4702124d804626184e94101a115dbec3aeaf2dfa3156eb709e8787574ef406356389da2f3b5874d0bd02092f94a8ede60d38cb26904cf10bd74511a706062466dc91ad4608249999aafde5222b68cc38ebc1f80eb83916a29a95284a5680579734f02f962129aa35778e71b1fe834141cafa3a2dca40f25fed9";
+        let update = hex::decode(update).unwrap();
+        let update = AccumulatorUpdateData::try_from_slice(&update).unwrap();
+        let Proof::WormholeMerkle { vaa: _, updates } = update.proof;
+        println!("Updates: {:?}", updates.len());
+        for update in updates {
+            let message: Message =
+                from_slice::<byteorder::BigEndian, _>(update.message.as_ref()).unwrap();
+            let feed_id_hex = hex::encode(message.feed_id());
+            println!("id: {}, Message: {:?}", feed_id_hex, message);
+        }
     }
 }

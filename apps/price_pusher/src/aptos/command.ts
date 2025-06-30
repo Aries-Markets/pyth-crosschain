@@ -1,4 +1,4 @@
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 import * as options from "../options";
 import { readPriceConfigFile } from "../price-config";
 import fs from "fs";
@@ -12,6 +12,9 @@ import {
 } from "./aptos";
 import { AptosAccount } from "aptos";
 import pino from "pino";
+import { filterInvalidPriceItems } from "../utils";
+import { PricePusherMetrics } from "../metrics";
+import { createAptosBalanceTracker } from "./balance-tracker";
 
 export default {
   command: "aptos",
@@ -39,10 +42,11 @@ export default {
     ...options.pollingFrequency,
     ...options.pushingFrequency,
     ...options.logLevel,
-    ...options.priceServiceConnectionLogLevel,
     ...options.controllerLogLevel,
+    ...options.enableMetrics,
+    ...options.metricsPort,
   },
-  handler: function (argv: any) {
+  handler: async function (argv: any) {
     // FIXME: type checks for this
     const {
       endpoint,
@@ -54,36 +58,51 @@ export default {
       pollingFrequency,
       overrideGasPriceMultiplier,
       logLevel,
-      priceServiceConnectionLogLevel,
       controllerLogLevel,
+      enableMetrics,
+      metricsPort,
     } = argv;
 
     const logger = pino({ level: logLevel });
 
     const priceConfigs = readPriceConfigFile(priceConfigFile);
-    const priceServiceConnection = new PriceServiceConnection(
-      priceServiceEndpoint,
-      {
-        logger: logger.child(
-          { module: "PriceServiceConnection" },
-          { level: priceServiceConnectionLogLevel }
-        ),
-      }
-    );
+    const hermesClient = new HermesClient(priceServiceEndpoint);
+
+    // Initialize metrics if enabled
+    let metrics: PricePusherMetrics | undefined;
+    if (enableMetrics) {
+      metrics = new PricePusherMetrics(logger.child({ module: "Metrics" }));
+      metrics.start(metricsPort);
+      logger.info(`Metrics server started on port ${metricsPort}`);
+    }
 
     const mnemonic = fs.readFileSync(mnemonicFile, "utf-8").trim();
     const account = AptosAccount.fromDerivePath(
       APTOS_ACCOUNT_HD_PATH,
-      mnemonic
+      mnemonic,
     );
     logger.info(`Pushing from account address: ${account.address()}`);
 
-    const priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+    let priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+
+    // Better to filter out invalid price items before creating the pyth listener
+    const { existingPriceItems, invalidPriceItems } =
+      await filterInvalidPriceItems(hermesClient, priceItems);
+
+    if (invalidPriceItems.length > 0) {
+      logger.error(
+        `Invalid price id submitted for: ${invalidPriceItems
+          .map(({ alias }) => alias)
+          .join(", ")}`,
+      );
+    }
+
+    priceItems = existingPriceItems;
 
     const pythListener = new PythPriceListener(
-      priceServiceConnection,
+      hermesClient,
       priceItems,
-      logger.child({ module: "PythPriceListener" })
+      logger.child({ module: "PythPriceListener" }),
     );
 
     const aptosListener = new AptosPriceListener(
@@ -91,16 +110,16 @@ export default {
       endpoint,
       priceItems,
       logger.child({ module: "AptosPriceListener" }),
-      { pollingFrequency }
+      { pollingFrequency },
     );
 
     const aptosPusher = new AptosPricePusher(
-      priceServiceConnection,
+      hermesClient,
       logger.child({ module: "AptosPricePusher" }),
       pythContractAddress,
       endpoint,
       mnemonic,
-      overrideGasPriceMultiplier
+      overrideGasPriceMultiplier,
     );
 
     const controller = new Controller(
@@ -109,8 +128,26 @@ export default {
       aptosListener,
       aptosPusher,
       logger.child({ module: "Controller" }, { level: controllerLogLevel }),
-      { pushingFrequency }
+      {
+        pushingFrequency,
+        metrics,
+      },
     );
+
+    // Create and start the balance tracker if metrics are enabled
+    if (metrics) {
+      const balanceTracker = createAptosBalanceTracker({
+        address: account.address().toString(),
+        endpoint,
+        network: "aptos",
+        updateInterval: pushingFrequency,
+        metrics,
+        logger: logger.child({ module: "AptosBalanceTracker" }),
+      });
+
+      // Start the balance tracker
+      await balanceTracker.start();
+    }
 
     controller.start();
   },

@@ -2,15 +2,16 @@ import { Transaction } from "@mysten/sui/transactions";
 
 import { MIST_PER_SUI, normalizeSuiObjectId, fromB64 } from "@mysten/sui/utils";
 
-import { Ed25519Keypair } from "@mysten/sui/dist/cjs/keypairs/ed25519";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import { execSync } from "child_process";
 import { DataSource } from "@pythnetwork/xc-admin-common";
 import { SuiClient } from "@mysten/sui/client";
+import { bcs } from "@mysten/sui/bcs";
 
 export async function publishPackage(
   keypair: Ed25519Keypair,
   provider: SuiClient,
-  packagePath: string
+  packagePath: string,
 ): Promise<{ packageId: string; upgradeCapId: string; deployerCapId: string }> {
   // Build contracts
   const buildOutput: {
@@ -21,14 +22,13 @@ export async function publishPackage(
       `sui move build --dump-bytecode-as-base64 --path ${__dirname}/${packagePath} 2> /dev/null`,
       {
         encoding: "utf-8",
-      }
-    )
+      },
+    ),
   );
 
   console.log("buildOutput: ", buildOutput);
 
   // Publish contracts
-  // const transactionBlock = new TransactionBlock();
   const txb = new Transaction();
 
   txb.setGasBudget(MIST_PER_SUI / 2n); // 0.5 SUI
@@ -36,7 +36,7 @@ export async function publishPackage(
   const [upgradeCap] = txb.publish({
     modules: buildOutput.modules.map((m: string) => Array.from(fromB64(m))),
     dependencies: buildOutput.dependencies.map((d: string) =>
-      normalizeSuiObjectId(d)
+      normalizeSuiObjectId(d),
     ),
   });
 
@@ -54,7 +54,7 @@ export async function publishPackage(
   });
 
   const publishedChanges = result.objectChanges?.filter(
-    (change) => change.type === "published"
+    (change) => change.type === "published",
   );
 
   if (
@@ -63,7 +63,7 @@ export async function publishPackage(
   ) {
     throw new Error(
       "No publish event found in transaction:" +
-        JSON.stringify(result.objectChanges, null, 2)
+        JSON.stringify(result.objectChanges, null, 2),
     );
   }
 
@@ -104,24 +104,36 @@ export async function initPyth(
   config: {
     dataSources: DataSource[];
     governanceDataSource: DataSource;
-  }
+  },
 ) {
   const tx = new Transaction();
 
   const baseUpdateFee = tx.pure.u64(1);
-  const dataSourceEmitterAddresses = tx.pure.arguments(
-    config.dataSources.map((dataSource) => [
-      ...Buffer.from(dataSource.emitterAddress, "hex"),
-    ])
+  const dataSourceEmitterAddresses = tx.pure(
+    bcs
+      .vector(bcs.vector(bcs.u8()))
+      .serialize(
+        config.dataSources.map((dataSource) => [
+          ...Buffer.from(dataSource.emitterAddress, "hex"),
+        ]),
+      ),
   );
-  const dataSourceEmitterChainIds = tx.pure.arguments(
-    config.dataSources.map((dataSource) => dataSource.emitterChain)
+  const dataSourceEmitterChainIds = tx.pure(
+    bcs
+      .vector(bcs.u64())
+      .serialize(
+        config.dataSources.map((dataSource) => dataSource.emitterChain),
+      ),
   );
-  const governanceEmitterAddress = tx.pure.arguments([
-    ...Buffer.from(config.governanceDataSource.emitterAddress, "hex"),
-  ]);
-  const governanceEmitterChainId = tx.pure.arguments(
-    config.governanceDataSource.emitterChain
+  const governanceEmitterAddress = tx.pure(
+    bcs
+      .vector(bcs.u8())
+      .serialize([
+        ...Buffer.from(config.governanceDataSource.emitterAddress, "hex"),
+      ]),
+  );
+  const governanceEmitterChainId = tx.pure(
+    bcs.u64().serialize(config.governanceDataSource.emitterChain),
   );
   const stalePriceThreshold = tx.pure.u64(60);
   tx.moveCall({

@@ -1,23 +1,21 @@
 {
+  "name": "@pythnetwork/pyth-crosschain",
   "private": true,
-  "packageManager": "pnpm@9.2.0",
+  "packageManager": "pnpm@10.7.0",
   "engines": {
-    "node": "^18.19.1",
-    "pnpm": "^9.2.0"
+    "node": "^22.14.0",
+    "pnpm": "^10.7.0"
+  },
+  "scripts": {
+    "fix:format": "prettier --write .",
+    "install:modules": "[ $CI ] && true || pnpm install",
+    "test:format": "prettier --check .",
+    "turbo": "[ ! -d node_modules ] && pnpm install; turbo"
   },
   "devDependencies": {
-    "lerna": "^6.4.1",
-    "pre-commit": "^1.2.2",
-    "prettier": "2.7.1"
-  },
-  "pnpm": {
-    "overrides": {
-      "@injectivelabs/sdk-ts@1.10.72>@injectivelabs/token-metadata": "1.10.42",
-      "eslint-config-next>@typescript-eslint/parser": "^7.0.0",
-      "@solana/web3.js@^1.93.0": "1.92.3"
-    },
-    "patchedDependencies": {
-      "eccrypto@1.1.6": "patches/eccrypto@1.1.6.patch"
-    }
+    "@cprussin/prettier-config": "catalog:",
+    "prettier": "catalog:",
+    "prettier-plugin-solidity": "catalog:",
+    "turbo": "^2.4.4"
   }
 }

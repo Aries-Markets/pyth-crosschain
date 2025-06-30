@@ -1,24 +1,15 @@
 use {
-    super::verify_price_ids_exist,
+    super::validate_price_ids,
     crate::{
         api::{
             rest::RestError,
-            types::{
-                PriceIdInput,
-                RpcPriceFeed,
-            },
+            types::{PriceIdInput, RpcPriceFeed},
             ApiState,
         },
-        state::aggregate::{
-            Aggregates,
-            RequestTime,
-        },
+        state::aggregate::{Aggregates, RequestTime},
     },
     anyhow::Result,
-    axum::{
-        extract::State,
-        Json,
-    },
+    axum::{extract::State, Json},
     pyth_sdk::PriceIdentifier,
     serde_qs::axum::QsQuery,
     utoipa::IntoParams,
@@ -74,7 +65,7 @@ where
     S: Aggregates,
 {
     let price_ids: Vec<PriceIdentifier> = params.ids.into_iter().map(|id| id.into()).collect();
-    verify_price_ids_exist(&state, &price_ids).await?;
+    validate_price_ids(&state, &price_ids, false).await?;
 
     let state = &*state.state;
     let price_feeds_with_update_data =

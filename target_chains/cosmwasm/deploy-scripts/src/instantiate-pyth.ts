@@ -2,13 +2,10 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { sha256 } from "@cosmjs/crypto";
 import { getPythConfig } from "./configs";
-import {
-  CosmWasmChain,
-  CosmWasmPriceFeedContract,
-  DefaultStore,
-  Store,
-  toPrivateKey,
-} from "@pythnetwork/contract-manager";
+import { DefaultStore, Store } from "@pythnetwork/contract-manager/node/store";
+import { CosmWasmChain } from "@pythnetwork/contract-manager/core/chains";
+import { toPrivateKey } from "@pythnetwork/contract-manager/core/base";
+import { CosmWasmPriceFeedContract } from "@pythnetwork/contract-manager/core/contracts/cosmwasm";
 import { CHAINS } from "@pythnetwork/xc-admin-common";
 import { DeploymentType, getContractBytesDict } from "./helper";
 
@@ -61,11 +58,11 @@ async function run() {
   // get the wasm code from github
   let contractBytesDict = await getContractBytesDict(
     [pythArtifactZipName],
-    argv.contractVersion
+    argv.contractVersion,
   );
 
   const checksum = Buffer.from(
-    sha256(contractBytesDict[pythArtifactZipName])
+    sha256(contractBytesDict[pythArtifactZipName]),
   ).toString("hex");
 
   console.log(`Downloaded wasm checksum ${checksum}`);
@@ -75,7 +72,7 @@ async function run() {
   });
 
   console.log(
-    `Code stored on chain ${chain.getId()} at ${storeCodeRes.codeId}`
+    `Code stored on chain ${chain.getId()} at ${storeCodeRes.codeId}`,
   );
 
   const instantiateContractRes = await chainExecutor.instantiateContract({

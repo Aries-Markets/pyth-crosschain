@@ -1,17 +1,15 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { toPrivateKey } from "../src";
-import {
-  COMMON_DEPLOY_OPTIONS,
-  findEntropyContract,
-  findEvmChain,
-} from "./common";
+import { DefaultStore } from "../src/node/utils/store";
+import { EvmChain } from "../src/core/chains";
+import { toPrivateKey } from "../src/core/base";
+import { COMMON_DEPLOY_OPTIONS, findEntropyContract } from "./common";
 
 const parser = yargs(hideBin(process.argv))
   .usage(
     "Requests and reveals a random number from an entropy contract while measuing the\n" +
       "latency between request submission and availablity of the provider revelation from fortuna.\n" +
-      "Usage: $0 --chain <chain-id> --private-key <private-key>"
+      "Usage: $0 --chain <chain-id> --private-key <private-key>",
   )
   .options({
     chain: {
@@ -24,7 +22,7 @@ const parser = yargs(hideBin(process.argv))
 
 async function main() {
   const argv = await parser.argv;
-  const chain = findEvmChain(argv.chain);
+  const chain = DefaultStore.getChainOrThrow(argv.chain, EvmChain);
   const contract = findEntropyContract(chain);
 
   const provider = await contract.getDefaultProvider();
@@ -34,7 +32,7 @@ async function main() {
   const requestResponse = await contract.requestRandomness(
     userRandomNumber,
     provider,
-    privateKey
+    privateKey,
   );
   console.log("Request tx hash: ", requestResponse.transactionHash);
   const startTime = Date.now();
@@ -54,7 +52,7 @@ async function main() {
         providerRevelation,
         provider,
         sequenceNumber,
-        privateKey
+        privateKey,
       );
       console.log("Reveal tx hash: ", revealResponse.transactionHash);
       break;

@@ -1,6 +1,7 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DefaultStore, ENTROPY_DEFAULT_KEEPER } from "../src";
+import { DefaultStore } from "../src/node/utils/store";
+import { ENTROPY_DEFAULT_KEEPER } from "../src/core/contracts";
 import Web3 from "web3";
 
 const parser = yargs(hideBin(process.argv))
@@ -15,14 +16,25 @@ const parser = yargs(hideBin(process.argv))
 
 async function main() {
   const argv = await parser.argv;
-  const entries = [];
+  const entries: {
+    chain: string;
+    contract: string;
+    owner: string;
+    provider: string;
+    feeManager: string;
+    balance: string;
+    keeperBalance: string;
+    seq: string;
+    version: string;
+  }[] = [];
+
   const keeperAddress =
     ENTROPY_DEFAULT_KEEPER[argv.testnet ? "testnet" : "mainnet"];
   for (const contract of Object.values(DefaultStore.entropy_contracts)) {
     if (contract.getChain().isMainnet() === argv.testnet) continue;
     try {
       const provider = await contract.getDefaultProvider();
-      const w3 = new Web3(contract.getChain().getRpcUrl());
+      const w3 = contract.getChain().getWeb3();
       const balance = await w3.eth.getBalance(provider);
       const keeperBalance = await w3.eth.getBalance(keeperAddress);
       let version = "unknown";
@@ -32,10 +44,13 @@ async function main() {
         /* old deployments did not have this method */
       }
       const providerInfo = await contract.getProviderInfo(provider);
+      const owner = await contract.getOwner();
+
       entries.push({
         chain: contract.getChain().getId(),
         contract: contract.address,
-        provider: providerInfo.uri,
+        owner,
+        provider,
         feeManager: providerInfo.feeManager,
         balance: Web3.utils.fromWei(balance),
         keeperBalance: Web3.utils.fromWei(keeperBalance),

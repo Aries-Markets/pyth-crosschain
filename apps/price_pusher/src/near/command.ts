@@ -1,4 +1,4 @@
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 import * as options from "../options";
 import { readPriceConfigFile } from "../price-config";
 import { PythPriceListener } from "../pyth-price-listener";
@@ -6,6 +6,7 @@ import { Controller } from "../controller";
 import { Options } from "yargs";
 import { NearAccount, NearPriceListener, NearPricePusher } from "./near";
 import pino from "pino";
+import { filterInvalidPriceItems } from "../utils";
 
 export default {
   command: "near",
@@ -38,10 +39,9 @@ export default {
     ...options.pollingFrequency,
     ...options.pushingFrequency,
     ...options.logLevel,
-    ...options.priceServiceConnectionLogLevel,
     ...options.controllerLogLevel,
   },
-  handler: function (argv: any) {
+  handler: async function (argv: any) {
     // FIXME: type checks for this
     const {
       nodeUrl,
@@ -54,29 +54,34 @@ export default {
       pushingFrequency,
       pollingFrequency,
       logLevel,
-      priceServiceConnectionLogLevel,
       controllerLogLevel,
     } = argv;
 
     const logger = pino({ level: logLevel });
 
     const priceConfigs = readPriceConfigFile(priceConfigFile);
-    const priceServiceConnection = new PriceServiceConnection(
-      priceServiceEndpoint,
-      {
-        logger: logger.child(
-          { module: "PriceServiceConnection" },
-          { level: priceServiceConnectionLogLevel }
-        ),
-      }
-    );
+    const hermesClient = new HermesClient(priceServiceEndpoint);
 
-    const priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+    let priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+
+    // Better to filter out invalid price items before creating the pyth listener
+    const { existingPriceItems, invalidPriceItems } =
+      await filterInvalidPriceItems(hermesClient, priceItems);
+
+    if (invalidPriceItems.length > 0) {
+      logger.error(
+        `Invalid price id submitted for: ${invalidPriceItems
+          .map(({ alias }) => alias)
+          .join(", ")}`,
+      );
+    }
+
+    priceItems = existingPriceItems;
 
     const pythListener = new PythPriceListener(
-      priceServiceConnection,
+      hermesClient,
       priceItems,
-      logger
+      logger,
     );
 
     const nearAccount = new NearAccount(
@@ -84,7 +89,7 @@ export default {
       accountId,
       nodeUrl,
       privateKeyPath,
-      pythContractAddress
+      pythContractAddress,
     );
 
     const nearListener = new NearPriceListener(
@@ -93,13 +98,13 @@ export default {
       logger.child({ module: "NearPriceListener" }),
       {
         pollingFrequency,
-      }
+      },
     );
 
     const nearPusher = new NearPricePusher(
       nearAccount,
-      priceServiceConnection,
-      logger.child({ module: "NearPricePusher" })
+      hermesClient,
+      logger.child({ module: "NearPricePusher" }),
     );
 
     const controller = new Controller(
@@ -108,7 +113,7 @@ export default {
       nearListener,
       nearPusher,
       logger.child({ module: "Controller" }, { level: controllerLogLevel }),
-      { pushingFrequency }
+      { pushingFrequency },
     );
 
     controller.start();

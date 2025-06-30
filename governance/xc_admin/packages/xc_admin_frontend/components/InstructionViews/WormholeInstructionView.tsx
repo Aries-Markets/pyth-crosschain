@@ -16,6 +16,7 @@ import {
   getProgramName,
 } from '@pythnetwork/xc-admin-common'
 import { AccountMeta, PublicKey } from '@solana/web3.js'
+import type { ReactNode } from 'react'
 import CopyText from '../common/CopyText'
 import { ParsedAccountPubkeyRow, SignerTag, WritableTag } from './AccountUtils'
 import { usePythContext } from '../../contexts/PythContext'
@@ -31,7 +32,7 @@ const GovernanceInstructionView = ({
 }: {
   instruction: PythGovernanceAction
   actionName: string
-  content: JSX.Element
+  content: ReactNode
 }) => {
   return (
     <div className="space-y-4">
@@ -134,16 +135,14 @@ export const WormholeInstructionView = ({
                                   'string'
                                     ? parsedInstruction.args[key]
                                     : parsedInstruction.args[key] instanceof
-                                      Uint8Array
-                                    ? parsedInstruction.args[key].toString(
-                                        'hex'
-                                      )
-                                    : typeof parsedInstruction.args[key] ===
-                                      'bigint'
-                                    ? parsedInstruction.args[key].toString()
-                                    : JSON.stringify(
-                                        parsedInstruction.args[key]
-                                      )}
+                                        Uint8Array
+                                      ? parsedInstruction.args[key].toString()
+                                      : typeof parsedInstruction.args[key] ===
+                                          'bigint'
+                                        ? parsedInstruction.args[key].toString()
+                                        : JSON.stringify(
+                                            parsedInstruction.args[key]
+                                          )}
                                 </div>
                               )}
                             </>

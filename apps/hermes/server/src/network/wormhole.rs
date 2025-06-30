@@ -5,27 +5,15 @@
 //! application.
 
 use {
-    crate::{
-        config::RunOptions,
-        state::wormhole::Wormhole,
-    },
-    anyhow::{
-        anyhow,
-        Result,
-    },
+    crate::{config::RunOptions, state::wormhole::Wormhole},
+    anyhow::{anyhow, Result},
     futures::StreamExt,
     proto::spy::v1::{
-        filter_entry::Filter,
-        spy_rpc_service_client::SpyRpcServiceClient,
-        EmitterFilter,
-        FilterEntry,
-        SubscribeSignedVaaRequest,
+        filter_entry::Filter, spy_rpc_service_client::SpyRpcServiceClient, EmitterFilter,
+        FilterEntry, SubscribeSignedVaaRequest,
     },
     pythnet_sdk::ACCUMULATOR_EMITTER_ADDRESS,
-    std::{
-        sync::Arc,
-        time::Duration,
-    },
+    std::{sync::Arc, time::Duration},
     tokio::time::Instant,
     tonic::Request,
     wormhole_sdk::Chain,
@@ -42,7 +30,7 @@ impl std::fmt::Display for GuardianSet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[")?;
         for (i, key) in self.keys.iter().enumerate() {
-            // Comma seperated printing of the keys using hex encoding.
+            // Comma separated printing of the keys using hex encoding.
             if i != 0 {
                 write!(f, ", ")?;
             }
@@ -55,27 +43,33 @@ impl std::fmt::Display for GuardianSet {
 
 /// BridgeData extracted from wormhole bridge account, due to no API.
 #[derive(borsh::BorshDeserialize)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "we have to deserialize all fields but we don't use all of them"
+)]
 pub struct BridgeData {
     pub guardian_set_index: u32,
-    pub last_lamports:      u64,
-    pub config:             BridgeConfig,
+    pub last_lamports: u64,
+    pub config: BridgeConfig,
 }
 
 /// BridgeConfig extracted from wormhole bridge account, due to no API.
 #[derive(borsh::BorshDeserialize)]
-#[allow(dead_code)]
+#[allow(
+    dead_code,
+    reason = "we have to deserialize all fields but we don't use all of them"
+)]
 pub struct BridgeConfig {
     pub guardian_set_expiration_time: u32,
-    pub fee:                          u64,
+    pub fee: u64,
 }
 
 /// GuardianSetData extracted from wormhole bridge account, due to no API.
 #[derive(borsh::BorshDeserialize)]
 pub struct GuardianSetData {
-    pub _index:           u32,
-    pub keys:             Vec<[u8; 20]>,
-    pub _creation_time:   u32,
+    pub _index: u32,
+    pub keys: Vec<[u8; 20]>,
+    pub _creation_time: u32,
     pub _expiration_time: u32,
 }
 
@@ -87,6 +81,11 @@ pub struct GuardianSetData {
 ///
 /// The following module structure must match the protobuf definitions, so that the generated code
 /// can correctly reference modules from each other.
+#[allow(
+    clippy::enum_variant_names,
+    clippy::allow_attributes_without_reason,
+    reason = "generated code"
+)]
 mod proto {
     pub mod node {
         pub mod v1 {
@@ -140,7 +139,7 @@ where
 }
 
 #[tracing::instrument(skip(opts, state))]
-async fn run<S>(opts: RunOptions, state: Arc<S>) -> Result<!>
+async fn run<S>(opts: RunOptions, state: Arc<S>) -> Result<()>
 where
     S: Wormhole,
     S: Send + Sync + 'static,
@@ -150,7 +149,7 @@ where
         .subscribe_signed_vaa(Request::new(SubscribeSignedVaaRequest {
             filters: vec![FilterEntry {
                 filter: Some(Filter::EmitterFilter(EmitterFilter {
-                    chain_id:        Into::<u16>::into(Chain::Pythnet).into(),
+                    chain_id: Into::<u16>::into(Chain::Pythnet).into(),
                     emitter_address: hex::encode(ACCUMULATOR_EMITTER_ADDRESS),
                 })),
             }],
@@ -161,7 +160,10 @@ where
     while let Some(Ok(message)) = stream.next().await {
         let state = state.clone();
         tokio::spawn(async move {
-            if let Err(e) = state.process_message(message.vaa_bytes).await {
+            // We do not want to verify the VAA if it has already been seen.
+            // This improves performance, since the beacon may send the same body
+            // multiple times with different signatures.
+            if let Err(e) = state.process_message(message.vaa_bytes, false).await {
                 tracing::debug!(error = ?e, "Skipped VAA.");
             }
         });

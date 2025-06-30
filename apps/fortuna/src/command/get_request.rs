@@ -1,10 +1,7 @@
 use {
     crate::{
         chain::ethereum::PythContract,
-        config::{
-            Config,
-            GetRequestOptions,
-        },
+        config::{Config, GetRequestOptions},
     },
     anyhow::Result,
     std::sync::Arc,
@@ -16,6 +13,10 @@ pub async fn get_request(opts: &GetRequestOptions) -> Result<()> {
     let contract = Arc::new(PythContract::from_config(
         &Config::load(&opts.config.config)?.get_chain_config(&opts.chain_id)?,
     )?);
+
+    let p = contract.get_provider_info(opts.provider).call().await?;
+
+    tracing::info!("Found provider: {:?}", p);
 
     let r = contract
         .get_request(opts.provider, opts.sequence)

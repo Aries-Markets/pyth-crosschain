@@ -1,26 +1,12 @@
 use {
-    super::verify_price_ids_exist,
+    super::validate_price_ids,
     crate::{
-        api::{
-            doc_examples,
-            rest::RestError,
-            types::PriceIdInput,
-            ApiState,
-        },
-        state::aggregate::{
-            Aggregates,
-            RequestTime,
-        },
+        api::{doc_examples, rest::RestError, types::PriceIdInput, ApiState},
+        state::aggregate::{Aggregates, RequestTime},
     },
     anyhow::Result,
-    axum::{
-        extract::State,
-        Json,
-    },
-    base64::{
-        engine::general_purpose::STANDARD as base64_standard_engine,
-        Engine as _,
-    },
+    axum::{extract::State, Json},
+    base64::{engine::general_purpose::STANDARD as base64_standard_engine, Engine as _},
     pyth_sdk::PriceIdentifier,
     serde_qs::axum::QsQuery,
     utoipa::IntoParams,
@@ -41,7 +27,6 @@ pub struct LatestVaasQueryParams {
     #[param(example = "e62df6c8b4a85fe1a67db44dc12de5db330f7ac66b72dc658afedf0f4a415b43")]
     ids: Vec<PriceIdInput>,
 }
-
 
 /// **Deprecated: use /v2/updates/price/latest instead**
 ///
@@ -69,7 +54,7 @@ where
     S: Aggregates,
 {
     let price_ids: Vec<PriceIdentifier> = params.ids.into_iter().map(|id| id.into()).collect();
-    verify_price_ids_exist(&state, &price_ids).await?;
+    validate_price_ids(&state, &price_ids, false).await?;
 
     let state = &*state.state;
     let price_feeds_with_update_data =

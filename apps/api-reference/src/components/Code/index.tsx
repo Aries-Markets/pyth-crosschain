@@ -1,8 +1,8 @@
 import { Transition } from "@headlessui/react";
 import { ClipboardDocumentIcon, CheckIcon } from "@heroicons/react/24/outline";
 import clsx from "clsx";
-import { useMemo, useCallback, type HTMLAttributes } from "react";
-import { useEffect, useState } from "react";
+import type { HTMLAttributes } from "react";
+import { useMemo, useCallback, useEffect, useState } from "react";
 import type { OffsetOrPosition } from "shiki";
 
 import style from "./style.module.css";
@@ -54,7 +54,6 @@ type CopyButtonProps = Omit<HTMLAttributes<HTMLElement>, "children"> & {
 const CopyButton = ({ children, className, ...props }: CopyButtonProps) => {
   const [isCopied, setIsCopied] = useState(false);
   const copy = useCallback(() => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins
     navigator.clipboard
       .writeText(children)
       .then(() => {

@@ -27,7 +27,7 @@ It then pushes a price update to an on-chain Pyth contract if any of the followi
 - Price deviation: The latest Pyth price feed has changed more than `price_deviation` percent
   from the on-chain price feed price.
 - Confidence ratio: The latest Pyth price feed has confidence to price ratio of more than
-  `confidence_ratio`.
+  `confidence_ratio`. *We discourage using low values for this because it triggers push for every update in high confidence periods.*
 
 The parameters above are configured per price feed in a price configuration YAML file. The structure looks like this:
 
@@ -36,7 +36,7 @@ The parameters above are configured per price feed in a price configuration YAML
   id: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef # id of a price feed, a 32-byte hex string.
   time_difference: 60 # Time difference threshold (in seconds) to push a newer price feed.
   price_deviation: 0.5 # The price deviation (%) threshold to push a newer price feed.
-  confidence_ratio: 1 # The confidence/price (%) threshold to push a newer price feed.
+  confidence_ratio: 50 # The confidence/price (%) threshold to push a newer price feed.
 
   # Optional block to configure whether this feed can be early updated. If at least one feed meets the
   # triggering conditions above, all other feeds who meet the early update conditions will be included in
@@ -46,7 +46,7 @@ The parameters above are configured per price feed in a price configuration YAML
   early_update:
     time_difference: 30
     price_deviation: 0.1
-    confidence_ratio: 0.5
+    confidence_ratio: 5
 - ...
 ```
 
@@ -65,7 +65,7 @@ the feed.
   early_update:
     time_difference: 30
     price_deviation: 0.1
-    confidence_ratio: 0.5
+    confidence_ratio: 5
 ```
 
 Two sample YAML configuration files are available in the root of this repo.
@@ -75,7 +75,11 @@ You can get the list of available price feeds from
 
 Price pusher communicates with [Hermes][] price service to get the most recent price updates. Hermes listens to the
 Pythnet and Wormhole network to get latest price updates, and serves REST and websocket APIs for consumers to fetch the
-updates. Pyth hosts public endpoints for Hermes; however, it is recommended to get a private endpoint from one of the
+updates.
+
+NOTE: It is recommended to use stable hermes endpoints. If you are running the price pusher for **Aptos Testnet**, **Sui Testnet**, or **Near Testnet**, we recommend you use beta hermes endpoints.
+
+Pyth hosts [public endpoints](https://docs.pyth.network/price-feeds/api-instances-and-providers/hermes) for Hermes; however, it is recommended to get a private endpoint from one of the
 Hermes RPC providers for more reliability. Please refer to [this
 document](https://docs.pyth.network/documentation/pythnet-price-feeds/hermes) for more information.
 
@@ -84,7 +88,7 @@ To run the price pusher, please run the following commands, replacing the comman
 ```sh
 # Please run the two following commands once from the root of the repo to build the code.
 pnpm install
-pnpm exec lerna run build --scope @pythnetwork/price-pusher --include-dependencies
+pnpm turbo build --filter @pythnetwork/price-pusher
 
 # Navigate to the price_pusher folder
 cd apps/price_pusher
@@ -97,7 +101,10 @@ pnpm run start evm --endpoint wss://example-rpc.com \
     --mnemonic-file "path/to/mnemonic.txt" \
     [--pushing-frequency 10] \
     [--polling-frequency 5] \
-    [--override-gas-price-multiplier 1.1]
+    [--override-gas-price-multiplier 1.1] \
+    [--override-gas-price-multiplier-cap 5] \
+    [--gas-limit 1000000] \
+    [--gas-price 160000000]
 
 # For Injective
 pnpm run start injective --grpc-endpoint https://grpc-endpoint.com \
@@ -105,7 +112,9 @@ pnpm run start injective --grpc-endpoint https://grpc-endpoint.com \
     --price-config-file "path/to/price-config.beta.sample.yaml" \
     --mnemonic-file "path/to/mnemonic.txt" \
     --network testnet \
-    [--gas-price 500000000] \
+    [--gas-price 160000000] \
+    [--gas-multiplier 1.1] \
+    [--priceIds-process-chunk-size 100] \
     [--pushing-frequency 10] \
     [--polling-frequency 5]
 
@@ -150,7 +159,7 @@ pnpm run start solana \
   --endpoint https://api.mainnet-beta.solana.com \
   --keypair-file ./id.json \
   --shard-id 1 \
-  --jito-endpoint mainnet.block-engine.jito.wtf \
+  --jito-endpoints mainnet.block-engine.jito.wtf,ny.mainnet.block-engine.jito.wtf \
   --jito-keypair-file ./jito.json \
   --jito-tip-lamports 100000 \
   --jito-bundle-size 5 \
@@ -198,8 +207,7 @@ human-readable logs, you can pipe the output of the program to `pino-pretty`. Se
 
 You can configure the log level of some of the modules of the price pusher as well. The available modules are PriceServiceConnection, which
 is responsible for connecting to the Hermes price service, and Controller, which is responsible for checking the prices from the Hermes
-and the on-chain Pyth contract and deciding whether to push a new price. You can configure the log level of these modules by passing the
-`--price-service-connection-log-level` and `--controller-log-level` arguments, respectively.
+and the on-chain Pyth contract and deciding whether to push a new price. You can configure the log level of these modules by passing the `--controller-log-level` arguments, respectively.
 
 ### Example
 
@@ -252,3 +260,117 @@ pushed twice and you won't pay additional costs most of the time.** However, the
 conditions in the RPCs because they are often behind a load balancer which can sometimes cause rejected
 transactions to land on-chain. You can reduce the chances of additional cost overhead by reducing the
 pushing frequency.
+
+## Prometheus Metrics
+
+The price_pusher now supports Prometheus metrics to monitor the health and performance of the price update service. Metrics are exposed via an HTTP endpoint that can be scraped by Prometheus.
+
+### Available Metrics
+
+The following metrics are available:
+
+- **pyth_price_last_published_time** (Gauge): The last published time of a price feed in unix timestamp, labeled by price_id and alias
+- **pyth_price_update_attempts_total** (Counter): Total number of price update attempts with their trigger condition and status, labeled by price_id, alias, trigger, and status
+- **pyth_price_feeds_total** (Gauge): Total number of price feeds being monitored
+- **pyth_wallet_balance** (Gauge): Current wallet balance of the price pusher in native token units, labeled by wallet_address and network
+
+### Configuration
+
+Metrics are enabled by default and can be configured using the following command-line options:
+
+- `--enable-metrics`: Enable or disable the Prometheus metrics server (default: true)
+- `--metrics-port`: Port for the Prometheus metrics server (default: 9090)
+
+Example:
+
+```bash
+pnpm run dev evm --config config.evm.mainnet.json --metrics-port 9091
+```
+
+### Running Locally with Docker
+
+You can run the monitoring stack (Prometheus and Grafana) using the provided docker-compose configuration:
+
+1. Use the sample docker-compose file for metrics:
+
+```bash
+docker-compose -f docker-compose.metrics.sample.yaml up
+```
+
+This will start:
+- Prometheus server on port 9090 with the alerts configured in alerts.sample.yml
+- Grafana server on port 3000 with default credentials (admin/admin)
+
+The docker-compose.metrics.sample.yaml file includes a pre-configured Grafana dashboard (see the [Dashboard](#dashboard) section below) that displays all the metrics mentioned above. This dashboard provides monitoring of your price pusher operations with panels for configured feeds, active feeds, wallet balance, update statistics, and error tracking. The dashboard is automatically provisioned when you start the stack with docker-compose.
+
+### Example Grafana Queries
+
+Here are some example Grafana queries to monitor your price feeds:
+
+1. Last published time for each price feed:
+
+```
+pyth_price_last_published_time
+```
+
+2. Number of price updates in the last hour:
+
+```
+sum(increase(pyth_price_update_attempts_total{status="success"}[1h]))
+```
+
+3. Price feeds not updated in the last hour:
+
+```
+time() - pyth_price_last_published_time > 3600
+```
+
+4. Distribution of update conditions:
+
+```
+sum by (condition) (increase(pyth_update_conditions_total[$__range]))
+```
+
+5. Monitor wallet balances:
+
+```
+pyth_wallet_balance
+```
+
+6. Detect low wallet balances (below 0.1 tokens):
+
+```
+pyth_wallet_balance < 0.1
+```
+
+### Dashboard
+
+The docker-compose setup includes a pre-configured Grafana dashboard (`grafana-dashboard.sample.json`) that provides monitoring of your price pusher operations. The dashboard includes the following panels:
+
+- **Configured Price Feeds**: Shows the number of price feeds configured in your price-config file.
+- **Active Price Feeds**: Displays the number of price feeds currently being actively monitored.
+- **Time Since Last Update**: Shows how long it's been since the last successful price update was published on-chain.
+- **Price Feeds List**: A table listing all configured price feeds with their details.
+- **Successful Updates (Current Range)**: Graph showing the number of successful price updates over the current range with timeline.
+- **Update Conditions Distribution**: Pie chart showing the distribution of update conditions (YES/NO/EARLY) over the selected time range.
+- **Wallet Balance**: Current balance of your wallet in native token units.
+- **Wallet Balance Over Time**: Graph tracking your wallet balance over time to monitor consumption.
+- **Failed Updates (Current Range)**: Graph showing the number of failed price updates over the current range with timeline.
+
+When you first start the monitoring stack, the dashboard may show "No data" in the panels until the price pusher has been running for some time and has collected sufficient metrics.
+
+This dashboard is automatically provisioned when you start the docker-compose stack and provides visibility into the health and performance of your price pusher deployment.
+
+### Alerting
+
+The price pusher includes pre-configured Prometheus alerting rules in the `alerts.sample.yml` file. These rules monitor various aspects of the price pusher's operation, including:
+
+- Price feeds not being updated for an extended period (>1 hour)
+- High error rates in price update attempts
+- No successful price updates across all feeds in the last 30 minutes
+- Service availability monitoring
+- Low wallet balances with two severity levels:
+  - Warning: Balance below 0.1 native tokens
+  - Critical: Balance below 0.01 native tokens (transactions may fail soon)
+
+When using the docker-compose setup, these alerts are automatically loaded into Prometheus and can be viewed in the Alerting section of Grafana after setting up the Prometheus data source.

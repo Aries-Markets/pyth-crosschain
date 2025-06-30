@@ -1,89 +1,54 @@
 use {
     super::{
-        types::{
-            PriceIdInput,
-            RpcPriceFeed,
-        },
+        types::{PriceIdInput, RpcPriceFeed},
         ApiState,
     },
     crate::state::{
-        aggregate::{
-            Aggregates,
-            AggregationEvent,
-            RequestTime,
-        },
+        aggregate::{Aggregates, AggregationEvent, RequestTime},
         metrics::Metrics,
-        Benchmarks,
-        Cache,
-        PriceFeedMeta,
+        Benchmarks, Cache, PriceFeedMeta,
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
+    anyhow::{anyhow, Result},
     axum::{
         extract::{
-            ws::{
-                Message,
-                WebSocket,
-                WebSocketUpgrade,
-            },
+            ws::{Message, WebSocket, WebSocketUpgrade},
             State as AxumState,
         },
         http::HeaderMap,
         response::IntoResponse,
     },
     futures::{
-        stream::{
-            SplitSink,
-            SplitStream,
-        },
-        SinkExt,
-        StreamExt,
+        stream::{SplitSink, SplitStream},
+        SinkExt, StreamExt,
     },
-    governor::{
-        DefaultKeyedRateLimiter,
-        Quota,
-        RateLimiter,
-    },
+    governor::{DefaultKeyedRateLimiter, Quota, RateLimiter},
     ipnet::IpNet,
     nonzero_ext::nonzero,
     prometheus_client::{
-        encoding::{
-            EncodeLabelSet,
-            EncodeLabelValue,
-        },
-        metrics::{
-            counter::Counter,
-            family::Family,
-        },
+        encoding::{EncodeLabelSet, EncodeLabelValue},
+        metrics::{counter::Counter, family::Family},
     },
     pyth_sdk::PriceIdentifier,
-    serde::{
-        Deserialize,
-        Serialize,
-    },
+    serde::{Deserialize, Serialize},
     std::{
         collections::HashMap,
         net::IpAddr,
         num::NonZeroU32,
         sync::{
-            atomic::{
-                AtomicUsize,
-                Ordering,
-            },
+            atomic::{AtomicUsize, Ordering},
             Arc,
         },
         time::Duration,
     },
-    tokio::sync::{
-        broadcast::Receiver,
-        watch,
+    tokio::{
+        sync::{broadcast::Receiver, watch},
+        time::Instant,
     },
 };
 
 const PING_INTERVAL_DURATION: Duration = Duration::from_secs(30);
-const MAX_CLIENT_MESSAGE_SIZE: usize = 100 * 1024; // 100 KiB
+const MAX_CLIENT_MESSAGE_SIZE: usize = 1025 * 1024; // 1 MiB
+const MAX_CONNECTION_DURATION: Duration = Duration::from_secs(24 * 60 * 60); // 24 hours
 
 /// The maximum number of bytes that can be sent per second per IP address.
 /// If the limit is exceeded, the connection is closed.
@@ -91,8 +56,8 @@ const BYTES_LIMIT_PER_IP_PER_SECOND: u32 = 256 * 1024; // 256 KiB
 
 #[derive(Clone)]
 pub struct PriceFeedClientConfig {
-    verbose:            bool,
-    binary:             bool,
+    verbose: bool,
+    binary: bool,
     allow_out_of_order: bool,
 }
 
@@ -115,7 +80,7 @@ pub enum Status {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, EncodeLabelSet)]
 pub struct Labels {
     pub interaction: Interaction,
-    pub status:      Status,
+    pub status: Status,
 }
 
 pub struct WsMetrics {
@@ -153,11 +118,11 @@ impl WsMetrics {
 }
 
 pub struct WsState {
-    pub subscriber_counter:       AtomicUsize,
-    pub bytes_limit_whitelist:    Vec<IpNet>,
-    pub rate_limiter:             DefaultKeyedRateLimiter<IpAddr>,
+    pub subscriber_counter: AtomicUsize,
+    pub bytes_limit_whitelist: Vec<IpNet>,
+    pub rate_limiter: DefaultKeyedRateLimiter<IpAddr>,
     pub requester_ip_header_name: String,
-    pub metrics:                  WsMetrics,
+    pub metrics: WsMetrics,
 }
 
 impl WsState {
@@ -178,24 +143,24 @@ impl WsState {
     }
 }
 
-
 #[derive(Deserialize, Debug, Clone)]
 #[serde(tag = "type")]
 enum ClientMessage {
     #[serde(rename = "subscribe")]
     Subscribe {
-        ids:                Vec<PriceIdInput>,
+        ids: Vec<PriceIdInput>,
         #[serde(default)]
-        verbose:            bool,
+        verbose: bool,
         #[serde(default)]
-        binary:             bool,
+        binary: bool,
         #[serde(default)]
         allow_out_of_order: bool,
+        #[serde(default)]
+        ignore_invalid_price_ids: bool,
     },
     #[serde(rename = "unsubscribe")]
     Unsubscribe { ids: Vec<PriceIdInput> },
 }
-
 
 #[derive(Serialize, Debug, Clone)]
 #[serde(tag = "type")]
@@ -257,7 +222,7 @@ where
         .interactions
         .get_or_create(&Labels {
             interaction: Interaction::NewConnection,
-            status:      Status::Success,
+            status: Status::Success,
         })
         .inc();
 
@@ -281,18 +246,19 @@ pub type SubscriberId = usize;
 /// Subscriber is an actor that handles a single websocket connection.
 /// It listens to the store for updates and sends them to the client.
 pub struct Subscriber<S> {
-    id:                      SubscriberId,
-    ip_addr:                 Option<IpAddr>,
-    closed:                  bool,
-    state:                   Arc<S>,
-    ws_state:                Arc<WsState>,
-    notify_receiver:         Receiver<AggregationEvent>,
-    receiver:                SplitStream<WebSocket>,
-    sender:                  SplitSink<WebSocket, Message>,
+    id: SubscriberId,
+    ip_addr: Option<IpAddr>,
+    closed: bool,
+    state: Arc<S>,
+    ws_state: Arc<WsState>,
+    notify_receiver: Receiver<AggregationEvent>,
+    receiver: SplitStream<WebSocket>,
+    sender: SplitSink<WebSocket, Message>,
     price_feeds_with_config: HashMap<PriceIdentifier, PriceFeedClientConfig>,
-    ping_interval:           tokio::time::Interval,
-    exit:                    watch::Receiver<bool>,
-    responded_to_ping:       bool,
+    ping_interval: tokio::time::Interval,
+    connection_deadline: Instant,
+    exit: watch::Receiver<bool>,
+    responded_to_ping: bool,
 }
 
 impl<S> Subscriber<S>
@@ -319,6 +285,7 @@ where
             sender,
             price_feeds_with_config: HashMap::new(),
             ping_interval: tokio::time::interval(PING_INTERVAL_DURATION),
+            connection_deadline: Instant::now() + MAX_CONNECTION_DURATION,
             exit: crate::EXIT.subscribe(),
             responded_to_ping: true, // We start with true so we don't close the connection immediately
         }
@@ -362,6 +329,26 @@ where
                 }
                 self.responded_to_ping = false;
                 self.sender.send(Message::Ping(vec![])).await?;
+                Ok(())
+            },
+            _ = tokio::time::sleep_until(self.connection_deadline) => {
+                tracing::info!(
+                    id = self.id,
+                    ip = ?self.ip_addr,
+                    "Connection timeout reached (24h). Closing connection.",
+                );
+                self.sender
+                    .send(
+                        serde_json::to_string(&ServerMessage::Response(
+                            ServerResponseMessage::Err {
+                                error: "Connection timeout reached (24h)".to_string(),
+                            },
+                        ))?
+                        .into(),
+                    )
+                    .await?;
+                self.sender.close().await?;
+                self.closed = true;
                 Ok(())
             },
             _ = self.exit.changed() => {
@@ -460,10 +447,9 @@ where
                         .interactions
                         .get_or_create(&Labels {
                             interaction: Interaction::RateLimit,
-                            status:      Status::Error,
+                            status: Status::Error,
                         })
                         .inc();
-
 
                     self.sender
                         .send(
@@ -488,7 +474,7 @@ where
                 .interactions
                 .get_or_create(&Labels {
                     interaction: Interaction::PriceUpdate,
-                    status:      Status::Success,
+                    status: Status::Success,
                 })
                 .inc();
         }
@@ -511,7 +497,7 @@ where
                     .interactions
                     .get_or_create(&Labels {
                         interaction: Interaction::CloseConnection,
-                        status:      Status::Success,
+                        status: Status::Success,
                     })
                     .inc();
 
@@ -535,7 +521,7 @@ where
                     .interactions
                     .get_or_create(&Labels {
                         interaction: Interaction::ClientHeartbeat,
-                        status:      Status::Success,
+                        status: Status::Success,
                     })
                     .inc();
 
@@ -551,7 +537,7 @@ where
                     .interactions
                     .get_or_create(&Labels {
                         interaction: Interaction::ClientMessage,
-                        status:      Status::Error,
+                        status: Status::Error,
                     })
                     .inc();
                 self.sender
@@ -572,18 +558,22 @@ where
                 verbose,
                 binary,
                 allow_out_of_order,
+                ignore_invalid_price_ids,
             }) => {
                 let price_ids: Vec<PriceIdentifier> = ids.into_iter().map(|id| id.into()).collect();
                 let available_price_ids = Aggregates::get_price_feed_ids(&*self.state).await;
 
-                let not_found_price_ids: Vec<&PriceIdentifier> = price_ids
+                let (found_price_ids, not_found_price_ids): (
+                    Vec<&PriceIdentifier>,
+                    Vec<&PriceIdentifier>,
+                ) = price_ids
                     .iter()
-                    .filter(|price_id| !available_price_ids.contains(price_id))
-                    .collect();
+                    .partition(|price_id| available_price_ids.contains(price_id));
 
                 // If there is a single price id that is not found, we don't subscribe to any of the
-                // asked correct price feed ids and return an error to be more explicit and clear.
-                if !not_found_price_ids.is_empty() {
+                // asked correct price feed ids and return an error to be more explicit and clear,
+                // unless the client explicitly asked to ignore invalid ids
+                if !not_found_price_ids.is_empty() && !ignore_invalid_price_ids {
                     self.sender
                         .send(
                             serde_json::to_string(&ServerMessage::Response(
@@ -599,9 +589,9 @@ where
                         .await?;
                     return Ok(());
                 } else {
-                    for price_id in price_ids {
+                    for price_id in found_price_ids {
                         self.price_feeds_with_config.insert(
-                            price_id,
+                            *price_id,
                             PriceFeedClientConfig {
                                 verbose,
                                 binary,
@@ -624,7 +614,7 @@ where
             .interactions
             .get_or_create(&Labels {
                 interaction: Interaction::ClientMessage,
-                status:      Status::Success,
+                status: Status::Success,
             })
             .inc();
 

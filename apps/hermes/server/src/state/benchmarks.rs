@@ -2,18 +2,12 @@
 
 use {
     super::{
-        aggregate::{
-            PriceFeedsWithUpdateData,
-            UnixTimestamp,
-        },
+        aggregate::{PriceFeedsWithUpdateData, UnixTimestamp},
         State,
     },
     crate::api::types::PriceUpdate,
-    anyhow::Result,
-    base64::{
-        engine::general_purpose::STANDARD as base64_standard_engine,
-        Engine as _,
-    },
+    anyhow::{Context, Result},
+    base64::{engine::general_purpose::STANDARD as base64_standard_engine, Engine as _},
     pyth_sdk::PriceIdentifier,
     reqwest::Url,
     serde::Deserialize,
@@ -32,7 +26,7 @@ enum BlobEncoding {
 #[derive(Deserialize, Debug, Clone)]
 struct BinaryBlob {
     pub encoding: BlobEncoding,
-    pub data:     Vec<String>,
+    pub data: Vec<String>,
 }
 
 impl TryFrom<BinaryBlob> for Vec<Vec<u8>> {
@@ -95,7 +89,7 @@ where
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Benchmarks endpoint is not set"))?
             .join(&format!("/v1/updates/price/{}", publish_time))
-            .unwrap();
+            .context("failed to construct price endpoint")?;
 
         let mut request = reqwest::Client::new()
             .get(endpoint)

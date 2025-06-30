@@ -99,7 +99,7 @@ describe("Test http endpoints", () => {
     const publishTime10SecAgo = Math.floor(new Date().getTime() / 1000) - 10;
     const [vaa, vaaPublishTime] = await connection.getVaa(
       ids[0],
-      publishTime10SecAgo
+      publishTime10SecAgo,
     );
 
     expect(vaa.length).toBeGreaterThan(0);
@@ -141,7 +141,7 @@ describe("Test websocket endpoints", () => {
         // Make sure it receives more than 1 update
         expect(counter.get(id)).toBeGreaterThan(1);
       }
-    }
+    },
   );
 
   test.concurrent("websocket subscription works with verbose", async () => {
@@ -218,14 +218,15 @@ describe("Test websocket endpoints", () => {
       await sleep(20000);
       connection.closeWebSocket();
 
-      let seenOutOfOrder = false;
+      // Check for out of order slots but don't assert on it since it's not stable
       for (let i = 1; i < observedSlots.length; i++) {
         if (observedSlots[i] < observedSlots[i - 1]) {
-          seenOutOfOrder = true;
+          // Out of order slot found, but we don't assert on it
+          break;
         }
       }
 
       // expect(seenOutOfOrder).toBe(true);
-    }
+    },
   );
 });

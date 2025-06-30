@@ -15,7 +15,7 @@ module.exports = {
       },
     },
   },
-  defaultNetwork: "cronosZkEvmMainnet",
+  defaultNetwork: "mathMainnet",
   networks: {
     // [process.env.MIGRATIONS_NETWORK!]: {
     //   url: process.env.RPC_URL,
@@ -52,6 +52,19 @@ module.exports = {
       zksync: true,
       verifyURL:
         "https://explorer-api.zkevm.cronos.org/api/v1/contract/verify/hardhat?apikey=",
+    },
+    abstractTestnet: {
+      url: "https://api.testnet.abs.xyz",
+      ethNetwork: "sepolia",
+      zksync: true,
+      verifyURL:
+        "https://api-explorer-verify.testnet.abs.xyz/contract_verification",
+    },
+    mathMainnet: {
+      url: "https://redacted.master.dev/",
+      ethNetwork: "mainnet",
+      zksync: true,
+      verifyURL: "https://redacted.master.dev/contract_verification",
     },
   },
   etherscan: {
@@ -99,7 +112,8 @@ module.exports = {
     ],
   },
   solidity: {
-    version: "0.8.4",
+    version: "0.8.29",
+    evmVersion: "paris",
     settings: {
       optimizer: {
         enabled: true,

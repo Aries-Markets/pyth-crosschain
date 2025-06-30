@@ -1,34 +1,30 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import {
-  DefaultStore,
-  EvmEntropyContract,
-  PrivateKey,
-  toPrivateKey,
-} from "../src";
-import {
-  COMMON_DEPLOY_OPTIONS,
-  findEntropyContract,
-  findEvmChain,
-} from "./common";
-import Web3 from "web3";
+import { DefaultStore } from "../src/node/utils/store";
+import { EvmChain } from "../src/core/chains";
+import { toPrivateKey } from "../src/core/base";
+import { COMMON_DEPLOY_OPTIONS, findEntropyContract } from "./common";
 
 const parser = yargs(hideBin(process.argv))
   .usage(
     "Load tests the entropy contract using the EntropyTester contract with many requests in a single transaction\n" +
       "it does not monitor whether the callbacks are actually submitted or not.\n" +
-      "Usage: $0 --private-key <private-key> --chain <chain-id> --tester-address <tester-address>"
+      "Usage: $0 --private-key <private-key> --chain <chain-id> --tester-address <tester-address> --provider-address <provider-address>",
   )
   .options({
     chain: {
       type: "string",
       demandOption: true,
-      desc: "test latency for the contract on this chain",
+      desc: "Chain to load test the entropy contract on",
     },
     "tester-address": {
       type: "string",
       demandOption: true,
-      desc: "Tester contract address",
+      desc: "Address of the EntropyTester contract",
+    },
+    provider: {
+      type: "string",
+      desc: "Address of the entropy provider to use for requests (defaults to default provider)",
     },
     "success-count": {
       type: "number",
@@ -67,22 +63,22 @@ const ABI = [
     stateMutability: "nonpayable",
     type: "function",
   },
-] as any;
+] as any; // eslint-disable-line @typescript-eslint/no-explicit-any
 
 async function main() {
   const argv = await parser.argv;
   const privateKey = toPrivateKey(argv.privateKey);
-  const chain = findEvmChain(argv.chain);
+  const chain = DefaultStore.getChainOrThrow(argv.chain, EvmChain);
   const contract = findEntropyContract(chain);
-  const provider = await contract.getDefaultProvider();
+  const provider = argv.provider || (await contract.getDefaultProvider());
   const fee = await contract.getFee(provider);
-  const web3 = new Web3(contract.chain.getRpcUrl());
+  const web3 = contract.chain.getWeb3();
   const testerContract = new web3.eth.Contract(ABI, argv.testerAddress);
   const { address } = web3.eth.accounts.wallet.add(privateKey);
   const transactionObject = testerContract.methods.batchRequests(
     provider,
     argv.successCount,
-    argv.revertCount
+    argv.revertCount,
   );
   const totalCount = argv.successCount + argv.revertCount;
   const result = await contract.chain.estiamteAndSendTransaction(
@@ -90,7 +86,7 @@ async function main() {
     {
       from: address,
       value: (fee * totalCount).toString(),
-    }
+    },
   );
   console.log("Submitted transaction ", result.transactionHash);
 }

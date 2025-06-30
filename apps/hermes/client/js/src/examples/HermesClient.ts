@@ -1,7 +1,7 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 
-import { HermesClient } from "../HermesClient";
+import { HermesClient, PriceUpdate } from "../HermesClient";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -43,7 +43,7 @@ function extractBasicAuthorizationHeadersFromUrl(urlString: string): {
 
   if (url.username && url.password) {
     headers["Authorization"] = `Basic ${btoa(
-      `${url.username}:${url.password}`
+      `${url.username}:${url.password}`,
     )}`;
     url.username = "";
     url.password = "";
@@ -54,24 +54,32 @@ function extractBasicAuthorizationHeadersFromUrl(urlString: string): {
 
 async function run() {
   const { endpoint, headers } = extractBasicAuthorizationHeadersFromUrl(
-    argv.endpoint
+    argv.endpoint,
   );
   const connection = new HermesClient(endpoint, { headers });
 
   const priceIds = argv.priceIds as string[];
 
   // Get price feeds
+  console.log(`Price feeds matching "btc" with asset type "crypto":`);
   const priceFeeds = await connection.getPriceFeeds({
     query: "btc",
-    filter: "crypto",
+    assetType: "crypto",
   });
   console.log(priceFeeds);
 
   // Latest price updates
+  console.log(`Latest price updates for price IDs ${priceIds}:`);
   const priceUpdates = await connection.getLatestPriceUpdates(priceIds);
   console.log(priceUpdates);
 
+  // Get the latest 5 second TWAPs
+  console.log(`Latest 5 second TWAPs for price IDs ${priceIds}`);
+  const twapUpdates = await connection.getLatestTwaps(priceIds, 5);
+  console.log(twapUpdates);
+
   // Streaming price updates
+  console.log(`Streaming latest prices for price IDs ${priceIds}...`);
   const eventSource = await connection.getPriceUpdatesStream(priceIds, {
     encoding: "hex",
     parsed: true,
@@ -79,11 +87,13 @@ async function run() {
     benchmarksOnly: true,
   });
 
-  eventSource.onmessage = (event) => {
+  eventSource.onmessage = (event: MessageEvent<string>) => {
     console.log("Received price update:", event.data);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const priceUpdate = JSON.parse(event.data) as PriceUpdate;
   };
 
-  eventSource.onerror = (error) => {
+  eventSource.onerror = (error: Event) => {
     console.error("Error receiving updates:", error);
     eventSource.close();
   };

@@ -1,85 +1,36 @@
 use {
     crate::{
-        api::{
-            self,
-            BlockchainState,
-            ChainId,
-        },
-        chain::{
-            ethereum::InstrumentedPythContract,
-            traced_client::{
-                RpcMetrics,
-                TracedClient,
-            },
-        },
+        api::{self, ApiBlockChainState, BlockchainState, ChainId},
+        chain::ethereum::InstrumentedPythContract,
         command::register_provider::CommitmentMetadata,
         config::{
-            Commitment,
-            Config,
-            EthereumConfig,
+            Commitment, Config, EthereumConfig, ProviderConfig, ReplicaConfig, RunConfig,
             RunOptions,
         },
-        keeper::{
-            self,
-            KeeperMetrics,
-        },
-        state::{
-            HashChainState,
-            PebbleHashChain,
-        },
+        eth_utils::traced_client::RpcMetrics,
+        history::History,
+        keeper::{self, keeper_metrics::KeeperMetrics},
+        state::{HashChainState, MonitoredHashChainState, PebbleHashChain},
     },
-    anyhow::{
-        anyhow,
-        Error,
-        Result,
-    },
+    anyhow::{anyhow, Error, Result},
     axum::Router,
-    ethers::{
-        middleware::Middleware,
-        types::{
-            Address,
-            BlockNumber,
-        },
-    },
-    futures::future::join_all,
-    prometheus_client::{
-        encoding::EncodeLabelSet,
-        metrics::{
-            family::Family,
-            gauge::Gauge,
-        },
-        registry::Registry,
-    },
-    std::{
-        collections::HashMap,
-        net::SocketAddr,
-        sync::Arc,
-        time::{
-            Duration,
-            SystemTime,
-            UNIX_EPOCH,
-        },
-    },
+    ethers::types::Address,
+    prometheus_client::{encoding::EncodeLabelSet, registry::Registry},
+    std::{collections::HashMap, net::SocketAddr, sync::Arc},
     tokio::{
         spawn,
-        sync::{
-            watch,
-            RwLock,
-        },
-        time,
+        sync::{watch, RwLock},
     },
     tower_http::cors::CorsLayer,
     utoipa::OpenApi,
     utoipa_swagger_ui::SwaggerUi,
 };
 
-/// Track metrics in this interval
-const TRACK_INTERVAL: Duration = Duration::from_secs(10);
-
 pub async fn run_api(
     socket_addr: SocketAddr,
-    chains: HashMap<String, api::BlockchainState>,
+    chains: Arc<RwLock<HashMap<String, ApiBlockChainState>>>,
     metrics_registry: Arc<RwLock<Registry>>,
+    history: Arc<History>,
     mut rx_exit: watch::Receiver<bool>,
 ) -> Result<()> {
     #[derive(OpenApi)]
@@ -87,12 +38,17 @@ pub async fn run_api(
     paths(
     crate::api::revelation,
     crate::api::chain_ids,
+    crate::api::explorer,
     ),
     components(
     schemas(
     crate::api::GetRandomValueResponse,
+    crate::history::RequestStatus,
+    crate::history::RequestEntryState,
     crate::api::Blob,
     crate::api::BinaryEncoding,
+    crate::api::StateTag,
+    crate::api::ExplorerResponse,
     )
     ),
     tags(
@@ -101,7 +57,7 @@ pub async fn run_api(
     )]
     struct ApiDoc;
 
-    let api_state = api::ApiState::new(chains, metrics_registry).await;
+    let api_state = api::ApiState::new(chains, metrics_registry, history).await;
 
     // Initialize Axum Router. Note the type here is a `Router<State>` due to the use of the
     // `with_state` method which replaces `Body` with `State` in the type signature.
@@ -130,35 +86,6 @@ pub async fn run_api(
     Ok(())
 }
 
-
-pub async fn run_keeper(
-    chains: HashMap<String, api::BlockchainState>,
-    config: Config,
-    private_key: String,
-    metrics_registry: Arc<RwLock<Registry>>,
-    rpc_metrics: Arc<RpcMetrics>,
-) -> Result<()> {
-    let mut handles = Vec::new();
-    let keeper_metrics = Arc::new(KeeperMetrics::new(metrics_registry).await);
-    for (chain_id, chain_config) in chains {
-        let chain_eth_config = config
-            .chains
-            .get(&chain_id)
-            .expect("All chains should be present in the config file")
-            .clone();
-        let private_key = private_key.clone();
-        handles.push(spawn(keeper::run_keeper_threads(
-            private_key,
-            chain_eth_config,
-            chain_config.clone(),
-            keeper_metrics.clone(),
-            rpc_metrics.clone(),
-        )));
-    }
-
-    Ok(())
-}
-
 pub async fn run(opts: &RunOptions) -> Result<()> {
     let config = Config::load(&opts.config.config)?;
     let secret = config.provider.secret.load()?.ok_or(anyhow!(
@@ -168,43 +95,65 @@ pub async fn run(opts: &RunOptions) -> Result<()> {
     let metrics_registry = Arc::new(RwLock::new(Registry::default()));
     let rpc_metrics = Arc::new(RpcMetrics::new(metrics_registry.clone()).await);
 
-    let mut tasks = Vec::new();
+    let keeper_metrics: Arc<KeeperMetrics> =
+        Arc::new(KeeperMetrics::new(metrics_registry.clone()).await);
+
+    let keeper_private_key_option = config.keeper.private_key.load()?;
+    if keeper_private_key_option.is_none() {
+        tracing::info!("Not starting keeper service: no keeper private key specified. Please add one to the config if you would like to run the keeper service.")
+    }
+
+    let keeper_replica_config = config.keeper.replica_config.clone();
+    let keeper_run_config = config.keeper.run_config.clone();
+
+    let chains: Arc<RwLock<HashMap<ChainId, ApiBlockChainState>>> = Arc::new(RwLock::new(
+        config
+            .chains
+            .keys()
+            .map(|chain_id| (chain_id.clone(), ApiBlockChainState::Uninitialized))
+            .collect(),
+    ));
+    let history = Arc::new(History::new().await?);
     for (chain_id, chain_config) in config.chains.clone() {
+        keeper_metrics.add_chain(chain_id.clone(), config.provider.address);
+        let keeper_metrics = keeper_metrics.clone();
+        let keeper_private_key_option = keeper_private_key_option.clone();
+        let keeper_replica_config = keeper_replica_config.clone();
+        let keeper_run_config = keeper_run_config.clone();
+        let chains = chains.clone();
         let secret_copy = secret.clone();
         let rpc_metrics = rpc_metrics.clone();
-        tasks.push(spawn(async move {
-            let state = setup_chain_state(
-                &config.provider.address,
-                &secret_copy,
-                config.provider.chain_sample_interval,
-                &chain_id,
-                &chain_config,
-                rpc_metrics,
-            )
-            .await;
-
-            (chain_id, state)
-        }));
-    }
-    let states = join_all(tasks).await;
-
-    let mut chains: HashMap<ChainId, BlockchainState> = HashMap::new();
-    for result in states {
-        let (chain_id, state) = result?;
-
-        match state {
-            Ok(state) => {
-                chains.insert(chain_id.clone(), state);
+        let provider_config = config.provider.clone();
+        let history = history.clone();
+        spawn(async move {
+            loop {
+                let setup_result = setup_chain_and_run_keeper(
+                    provider_config.clone(),
+                    &chain_id,
+                    chain_config.clone(),
+                    keeper_metrics.clone(),
+                    keeper_private_key_option.clone(),
+                    keeper_replica_config.clone(),
+                    keeper_run_config.clone(),
+                    chains.clone(),
+                    &secret_copy,
+                    history.clone(),
+                    rpc_metrics.clone(),
+                )
+                .await;
+                match setup_result {
+                    Ok(_) => {
+                        tracing::info!("Chain {} initialized successfully", chain_id);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to initialize chain {}: {}", chain_id, e);
+                        tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
+                    }
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to setup {} {}", chain_id, e);
-            }
-        }
+        });
     }
-    if chains.is_empty() {
-        return Err(anyhow!("No chains were successfully setup"));
-    }
-
 
     // Listen for Ctrl+C so we can set the exit flag and wait for a graceful shutdown.
     spawn(async move {
@@ -218,50 +167,91 @@ pub async fn run(opts: &RunOptions) -> Result<()> {
         Ok::<(), Error>(())
     });
 
-    if let Some(keeper_private_key) = config.keeper.private_key.load()? {
-        spawn(run_keeper(
-            chains.clone(),
-            config.clone(),
-            keeper_private_key,
-            metrics_registry.clone(),
-            rpc_metrics.clone(),
-        ));
-    } else {
-        tracing::info!("Not starting keeper service: no keeper private key specified. Please add one to the config if you would like to run the keeper service.")
-    }
-
-    // Spawn a thread to track latest block lag. This helps us know if the rpc is up and updated with the latest block.
-    spawn(track_block_timestamp_lag(
-        config,
+    run_api(
+        opts.addr,
+        chains.clone(),
         metrics_registry.clone(),
+        history,
+        rx_exit,
+    )
+    .await?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn setup_chain_and_run_keeper(
+    provider_config: ProviderConfig,
+    chain_id: &ChainId,
+    chain_config: EthereumConfig,
+    keeper_metrics: Arc<KeeperMetrics>,
+    keeper_private_key_option: Option<String>,
+    keeper_replica_config: Option<ReplicaConfig>,
+    keeper_run_config: RunConfig,
+    chains: Arc<RwLock<HashMap<ChainId, ApiBlockChainState>>>,
+    secret_copy: &str,
+    history: Arc<History>,
+    rpc_metrics: Arc<RpcMetrics>,
+) -> Result<()> {
+    let state = setup_chain_state(
+        &provider_config.address,
+        secret_copy,
+        provider_config.chain_sample_interval,
+        chain_id,
+        &chain_config,
         rpc_metrics.clone(),
-    ));
-
-    run_api(opts.addr.clone(), chains, metrics_registry, rx_exit).await?;
-
+        keeper_metrics.clone(),
+    )
+    .await?;
+    chains.write().await.insert(
+        chain_id.clone(),
+        ApiBlockChainState::Initialized(state.clone()),
+    );
+    if let Some(keeper_private_key) = keeper_private_key_option {
+        keeper::run_keeper_threads(
+            keeper_private_key,
+            keeper_replica_config,
+            keeper_run_config,
+            chain_config,
+            state,
+            keeper_metrics.clone(),
+            history,
+            rpc_metrics.clone(),
+        )
+        .await?;
+    }
     Ok(())
 }
 
 async fn setup_chain_state(
     provider: &Address,
-    secret: &String,
+    secret: &str,
     chain_sample_interval: u64,
     chain_id: &ChainId,
     chain_config: &EthereumConfig,
     rpc_metrics: Arc<RpcMetrics>,
+    keeper_metrics: Arc<KeeperMetrics>,
 ) -> Result<BlockchainState> {
     let contract = Arc::new(InstrumentedPythContract::from_config(
-        &chain_config,
+        chain_config,
         chain_id.clone(),
         rpc_metrics,
     )?);
-    let mut provider_commitments = chain_config.commitments.clone().unwrap_or(Vec::new());
+    let network_id: u64 = contract
+        .get_network_id()
+        .await
+        .map_err(|e| anyhow!("Failed to get network id: {}. Chain id: {}", &chain_id, e))?
+        .as_u64();
+    let mut provider_commitments = chain_config.commitments.clone().unwrap_or_default();
     provider_commitments.sort_by(|c1, c2| {
         c1.original_commitment_sequence_number
             .cmp(&c2.original_commitment_sequence_number)
     });
 
-    let provider_info = contract.get_provider_info(*provider).call().await?;
+    let provider_info = contract
+        .get_provider_info(*provider)
+        .call()
+        .await
+        .map_err(|e| anyhow!("Failed to get provider info: {}", e))?;
     let latest_metadata = bincode::deserialize::<CommitmentMetadata>(
         &provider_info.commitment_metadata,
     )
@@ -284,8 +274,8 @@ async fn setup_chain_state(
     }
 
     provider_commitments.push(Commitment {
-        seed:                                latest_metadata.seed,
-        chain_length:                        latest_metadata.chain_length,
+        seed: latest_metadata.seed,
+        chain_length: latest_metadata.chain_length,
         original_commitment_sequence_number: provider_info.original_commitment_sequence_number,
     });
 
@@ -300,118 +290,50 @@ async fn setup_chain_state(
         let offset = commitment.original_commitment_sequence_number.try_into()?;
         offsets.push(offset);
 
-        let pebble_hash_chain = PebbleHashChain::from_config(
-            &secret,
-            &chain_id,
-            &provider,
+        let pebble_hash_chain = PebbleHashChain::from_config_async(
+            secret,
+            chain_id,
+            provider,
             &chain_config.contract_addr,
             &commitment.seed,
             commitment.chain_length,
             chain_sample_interval,
         )
+        .await
         .map_err(|e| anyhow!("Failed to create hash chain: {}", e))?;
         hash_chains.push(pebble_hash_chain);
     }
 
-    let chain_state = HashChainState {
-        offsets,
-        hash_chains,
-    };
+    let chain_state = HashChainState::new(offsets, hash_chains)?;
 
     if chain_state.reveal(provider_info.original_commitment_sequence_number)?
         != provider_info.original_commitment
     {
-        return Err(anyhow!("The root of the generated hash chain for chain id {} does not match the commitment. Are the secret and chain length configured correctly?", &chain_id).into());
+        return Err(anyhow!("The root of the generated hash chain for chain id {} does not match the commitment. Are the secret and chain length configured correctly?", &chain_id));
     } else {
         tracing::info!("Root of chain id {} matches commitment", &chain_id);
     }
 
+    let monitored_chain_state = MonitoredHashChainState::new(
+        Arc::new(chain_state),
+        keeper_metrics.clone(),
+        chain_id.clone(),
+        *provider,
+    );
+
     let state = BlockchainState {
         id: chain_id.clone(),
-        state: Arc::new(chain_state),
+        state: Arc::new(monitored_chain_state),
+        network_id,
         contract,
-        provider_address: provider.clone(),
+        provider_address: *provider,
         reveal_delay_blocks: chain_config.reveal_delay_blocks,
         confirmed_block_status: chain_config.confirmed_block_status,
     };
     Ok(state)
 }
 
-
 #[derive(Clone, Debug, Hash, PartialEq, Eq, EncodeLabelSet)]
 pub struct ChainLabel {
     pub chain_id: String,
-}
-
-
-#[tracing::instrument(name = "block_timestamp_lag", skip_all, fields(chain_id = chain_id))]
-pub async fn check_block_timestamp_lag(
-    chain_id: String,
-    chain_config: EthereumConfig,
-    metrics: Family<ChainLabel, Gauge>,
-    rpc_metrics: Arc<RpcMetrics>,
-) {
-    let provider =
-        match TracedClient::new(chain_id.clone(), &chain_config.geth_rpc_addr, rpc_metrics) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!("Failed to create provider for chain id - {:?}", e);
-                return;
-            }
-        };
-
-
-    const INF_LAG: i64 = 1000000; // value that definitely triggers an alert
-    let lag = match provider.get_block(BlockNumber::Latest).await {
-        Ok(block) => match block {
-            Some(block) => {
-                let block_timestamp = block.timestamp;
-                let server_timestamp = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs();
-                let lag: i64 = (server_timestamp as i64) - (block_timestamp.as_u64() as i64);
-                lag
-            }
-            None => {
-                tracing::error!("Block is None");
-                INF_LAG
-            }
-        },
-        Err(e) => {
-            tracing::error!("Failed to get block - {:?}", e);
-            INF_LAG
-        }
-    };
-    metrics
-        .get_or_create(&ChainLabel {
-            chain_id: chain_id.clone(),
-        })
-        .set(lag);
-}
-
-/// Tracks the difference between the server timestamp and the latest block timestamp for each chain
-pub async fn track_block_timestamp_lag(
-    config: Config,
-    metrics_registry: Arc<RwLock<Registry>>,
-    rpc_metrics: Arc<RpcMetrics>,
-) {
-    let metrics = Family::<ChainLabel, Gauge>::default();
-    metrics_registry.write().await.register(
-        "block_timestamp_lag",
-        "The difference between server timestamp and latest block timestamp",
-        metrics.clone(),
-    );
-    loop {
-        for (chain_id, chain_config) in &config.chains {
-            spawn(check_block_timestamp_lag(
-                chain_id.clone(),
-                chain_config.clone(),
-                metrics.clone(),
-                rpc_metrics.clone(),
-            ));
-        }
-
-        time::sleep(TRACK_INTERVAL).await;
-    }
 }

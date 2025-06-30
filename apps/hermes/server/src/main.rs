@@ -1,19 +1,10 @@
-#![feature(never_type)]
-#![feature(btree_cursors)]
-
 use {
-    anyhow::Result,
-    clap::{
-        CommandFactory,
-        Parser,
-    },
+    anyhow::{Context, Result},
+    clap::{CommandFactory, Parser},
     futures::future::join_all,
     lazy_static::lazy_static,
     std::io::IsTerminal,
-    tokio::{
-        spawn,
-        sync::watch,
-    },
+    tokio::{spawn, sync::watch},
 };
 
 mod api;
@@ -53,7 +44,7 @@ async fn init() -> Result<()> {
             // Initialize a cache store with a 1000 element circular buffer.
             let state = state::new(
                 update_tx.clone(),
-                1000,
+                opts.cache.size_slots,
                 opts.benchmarks.endpoint.clone(),
                 opts.aggregate.readiness_staleness_threshold.into(),
                 opts.aggregate.readiness_max_allowed_slot_lag,
@@ -62,9 +53,13 @@ async fn init() -> Result<()> {
             // Listen for Ctrl+C so we can set the exit flag and wait for a graceful shutdown.
             spawn(async move {
                 tracing::info!("Registered shutdown signal handler...");
-                tokio::signal::ctrl_c().await.unwrap();
-                tracing::info!("Shut down signal received, waiting for tasks...");
-                let _ = EXIT.send(true);
+                match tokio::signal::ctrl_c().await {
+                    Ok(()) => {
+                        tracing::info!("Shut down signal received, waiting for tasks...");
+                        let _ = EXIT.send(true);
+                    }
+                    Err(err) => tracing::warn!("failed to register shutdown signal handler: {err}"),
+                }
             });
 
             // Spawn all worker tasks, and wait for all to complete (which will happen if a shutdown
@@ -92,8 +87,8 @@ async fn init() -> Result<()> {
                         let defaults = arg
                             .get_default_values()
                             .iter()
-                            .map(|v| v.to_str().unwrap())
-                            .collect::<Vec<_>>()
+                            .map(|v| v.to_str().context("non-utf8 default arg value"))
+                            .collect::<Result<Vec<_>>>()?
                             .join(",");
 
                         println!(

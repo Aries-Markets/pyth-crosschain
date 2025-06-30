@@ -3,9 +3,10 @@ import { hideBin } from "yargs/helpers";
 import {
   AptosPriceFeedContract,
   CosmWasmPriceFeedContract,
-  DefaultStore,
   EvmPriceFeedContract,
-} from "../src";
+  TonPriceFeedContract,
+} from "../src/core/contracts";
+import { DefaultStore } from "../src/node/utils/store";
 
 const parser = yargs(hideBin(process.argv))
   .usage("Usage: $0")
@@ -36,7 +37,8 @@ async function main() {
     if (
       contract instanceof AptosPriceFeedContract ||
       contract instanceof EvmPriceFeedContract ||
-      contract instanceof CosmWasmPriceFeedContract
+      contract instanceof CosmWasmPriceFeedContract ||
+      contract instanceof TonPriceFeedContract
     ) {
       try {
         const fee = await contract.getTotalFee();
@@ -45,11 +47,11 @@ async function main() {
           feeUsd = Number(fee.amount) * prices[fee.denom];
           totalFeeUsd += feeUsd;
           console.log(
-            `${contract.getId()} ${fee.amount} ${fee.denom} ($${feeUsd})`
+            `${contract.getId()} ${fee.amount} ${fee.denom} ($${feeUsd})`,
           );
         } else {
           console.log(
-            `${contract.getId()} ${fee.amount} ${fee.denom} ($ value unknown)`
+            `${contract.getId()} ${fee.amount} ${fee.denom} ($ value unknown)`,
           );
         }
       } catch (e) {

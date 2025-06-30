@@ -2,12 +2,12 @@ import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { getWormholeConfig } from "./configs";
 import {
-  CosmWasmChain,
   CosmWasmPriceFeedContract,
-  DefaultStore,
-  toPrivateKey,
   CosmWasmWormholeContract,
-} from "@pythnetwork/contract-manager";
+} from "@pythnetwork/contract-manager/core/contracts/cosmwasm";
+import { toPrivateKey } from "@pythnetwork/contract-manager/core/base";
+import { CosmWasmChain } from "@pythnetwork/contract-manager/core/chains";
+import { DefaultStore, Store } from "@pythnetwork/contract-manager/node/store";
 import { CHAINS } from "@pythnetwork/xc-admin-common";
 import { DeploymentType } from "./helper";
 
@@ -50,10 +50,10 @@ async function run() {
   const storeCodeRes = await CosmWasmPriceFeedContract.storeCode(
     chain,
     privateKey,
-    wasmFilePath
+    wasmFilePath,
   );
   console.log(
-    `Code stored on chain ${chain.getId()} at ${storeCodeRes.codeId}`
+    `Code stored on chain ${chain.getId()} at ${storeCodeRes.codeId}`,
   );
   const chainExecutor = await chain.getExecutor(privateKey);
   const instantiateContractRes = await chainExecutor.instantiateContract({
@@ -66,7 +66,7 @@ async function run() {
     label: "wormhole",
   });
   console.log(
-    `Contract instantiated at ${instantiateContractRes.contractAddr}`
+    `Contract instantiated at ${instantiateContractRes.contractAddr}`,
   );
 
   await chainExecutor.updateContractAdmin({
@@ -77,7 +77,7 @@ async function run() {
 
   const contract = new CosmWasmWormholeContract(
     chain,
-    instantiateContractRes.contractAddr
+    instantiateContractRes.contractAddr,
   );
   if (argv.deploy === "stable") {
     console.log("Syncing guardian sets for mainnet contract");
@@ -85,8 +85,13 @@ async function run() {
     console.log("Sync complete");
   }
   console.log(
-    `Contract deployed on chain ${chain.getId()} at ${contract.address}`
+    `Contract deployed on chain ${chain.getId()} at ${contract.address}`,
   );
+
+  DefaultStore.wormhole_contracts[contract.getId()] = contract;
+  DefaultStore.saveAllContracts();
+  console.log("Added the following to your CosmWasm contracts configs");
+  console.log(Store.serialize(contract));
 }
 
 run();

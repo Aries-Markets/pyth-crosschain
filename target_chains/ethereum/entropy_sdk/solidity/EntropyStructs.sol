@@ -2,6 +2,11 @@
 
 pragma solidity ^0.8.0;
 
+// This contract holds old versions of the Entropy structs that are no longer used for contract storage.
+// However, they are still used in EntropyEvents to maintain the public interface of prior versions of
+// the Entropy contract.
+//
+// See EntropyStructsV2 for the struct definitions currently in use.
 contract EntropyStructs {
     struct ProviderInfo {
         uint128 feeInWei;
@@ -59,8 +64,7 @@ contract EntropyStructs {
         address requester;
         // If true, incorporate the blockhash of blockNumber into the generated random value.
         bool useBlockhash;
-        // If true, the requester will be called back with the generated random value.
+        // True if this is a request that expects a callback.
         bool isRequestWithCallback;
-        // There are 2 remaining bytes of free space in this slot.
     }
 }

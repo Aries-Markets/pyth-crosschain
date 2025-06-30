@@ -1,12 +1,10 @@
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
-import {
-  InstructionWithEphemeralSigners,
-  PythSolanaReceiver,
-} from "@pythnetwork/pyth-solana-receiver";
+import { InstructionWithEphemeralSigners, PythSolanaReceiver } from "../";
 import { Wallet } from "@coral-xyz/anchor";
 import fs from "fs";
 import os from "os";
+import { HermesClient } from "@pythnetwork/hermes-client";
+import { sendTransactions } from "@pythnetwork/solana-utils";
 
 // Get price feed ids from https://pyth.network/developers/price-feed-ids#pyth-evm-stable
 const SOL_PRICE_FEED_ID =
@@ -28,7 +26,18 @@ async function main() {
     `Sending transactions from account: ${keypair.publicKey.toBase58()}`
   );
   const wallet = new Wallet(keypair);
-  const pythSolanaReceiver = new PythSolanaReceiver({ connection, wallet });
+  // Optionally use an account lookup table to reduce tx sizes.
+  const addressLookupTableAccount = new PublicKey(
+    "5DNCErWQFBdvCxWQXaC1mrEFsvL3ftrzZ2gVZWNybaSX"
+  );
+  // Use a stable treasury ID of 0, since its address is indexed in the address lookup table.
+  // This is a tx size optimization and is optional. If not provided, a random treasury account will be used.
+  const treasuryId = 0;
+  const pythSolanaReceiver = new PythSolanaReceiver({
+    connection,
+    wallet,
+    treasuryId,
+  });
 
   // Get the price update from hermes
   const priceUpdateData = await getPriceUpdateData();
@@ -37,9 +46,15 @@ async function main() {
   // If closeUpdateAccounts = true, the builder will automatically generate instructions to close the ephemeral price update accounts
   // at the end of the transaction. Closing the accounts will reclaim their rent.
   // The example is using closeUpdateAccounts = false so you can easily look up the price update account in an explorer.
-  const transactionBuilder = pythSolanaReceiver.newTransactionBuilder({
-    closeUpdateAccounts: false,
-  });
+  const lookupTableAccount =
+    (await connection.getAddressLookupTable(addressLookupTableAccount)).value ??
+    undefined;
+  const transactionBuilder = pythSolanaReceiver.newTransactionBuilder(
+    {
+      closeUpdateAccounts: false,
+    },
+    lookupTableAccount
+  );
   // Post the price updates to ephemeral accounts, one per price feed.
   await transactionBuilder.addPostPriceUpdates(priceUpdateData);
   console.log(
@@ -60,25 +75,29 @@ async function main() {
 
   // Send the instructions in the builder in 1 or more transactions.
   // The builder will pack the instructions into transactions automatically.
-  await pythSolanaReceiver.provider.sendAll(
+  sendTransactions(
     await transactionBuilder.buildVersionedTransactions({
       computeUnitPriceMicroLamports: 100000,
+      tightComputeBudget: true,
     }),
-    { preflightCommitment: "processed" }
+    pythSolanaReceiver.connection,
+    pythSolanaReceiver.wallet
   );
 }
 
 // Fetch price update data from Hermes
 async function getPriceUpdateData() {
-  const priceServiceConnection = new PriceServiceConnection(
+  const priceServiceConnection = new HermesClient(
     "https://hermes.pyth.network/",
-    { priceFeedRequestConfig: { binary: true } }
+    {}
   );
 
-  return await priceServiceConnection.getLatestVaas([
-    SOL_PRICE_FEED_ID,
-    ETH_PRICE_FEED_ID,
-  ]);
+  const response = await priceServiceConnection.getLatestPriceUpdates(
+    [SOL_PRICE_FEED_ID, ETH_PRICE_FEED_ID],
+    { encoding: "base64" }
+  );
+
+  return response.binary.data;
 }
 
 // Load a solana keypair from an id.json file

@@ -1,9 +1,6 @@
 use anchor_lang::{
     account,
-    prelude::{
-        borsh::BorshSchema,
-        *,
-    },
+    prelude::{borsh::BorshSchema, *},
 };
 
 #[account]
@@ -11,4 +8,8 @@ use anchor_lang::{
 /// This struct records
 pub struct ClaimRecord {
     pub sequence: u64,
+}
+
+impl ClaimRecord {
+    pub const LEN: usize = 8;
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { ArrowPathIcon } from "@heroicons/react/24/outline";
+import { getEvmPriceFeedContractAddress } from "@pythnetwork/contract-manager/utils/utils";
 import PythAbi from "@pythnetwork/pyth-sdk-solidity/abis/IPyth.json";
 import PythErrorsAbi from "@pythnetwork/pyth-sdk-solidity/abis/PythErrors.json";
 import { ConnectKitButton, Avatar } from "connectkit";
@@ -9,8 +10,8 @@ import { ContractFunctionExecutionError } from "viem";
 import { useAccount, useConfig } from "wagmi";
 import { readContract, simulateContract, writeContract } from "wagmi/actions";
 
-import { type Parameter, TRANSFORMS } from "./parameter";
-import { getContractAddress } from "../../evm-networks";
+import type { Parameter } from "./parameter";
+import { TRANSFORMS } from "./parameter";
 import { useIsMounted } from "../../use-is-mounted";
 import { Button } from "../Button";
 import { Code } from "../Code";
@@ -88,7 +89,27 @@ export const RunButton = <ParameterName extends string>(
       {status.type === StatusType.Results && (
         <div>
           <h3 className="mb-2 text-lg font-bold">Results</h3>
-          <Code language="json">{stringifyResponse(status.data)}</Code>
+          {props.type === EvmApiType.Write &&
+          status.data &&
+          typeof status.data === "object" &&
+          "hash" in status.data &&
+          typeof status.data.hash === "string" ? (
+            <>
+              <p>{`Tx Hash: ${status.data.hash}`}</p>
+              {"link" in status.data &&
+                typeof status.data.link === "string" && (
+                  <InlineLink
+                    href={status.data.link}
+                    target="_blank"
+                    className="text-sm text-blue-500 hover:underline"
+                  >
+                    Open in explorer↗
+                  </InlineLink>
+                )}
+            </>
+          ) : (
+            <Code language="json">{stringifyResponse(status.data)}</Code>
+          )}
         </div>
       )}
       {status.type === StatusType.Error && (
@@ -145,11 +166,10 @@ const useRunButton = <ParameterName extends string>({
     if (args === undefined) {
       setStatus(ErrorStatus(new Error("Invalid parameters!")));
     } else {
-      const address = getContractAddress(config.state.chainId);
+      const address = getEvmPriceFeedContractAddress(config.state.chainId);
       if (!address) {
-        throw new Error(
-          `No contract for chain id: ${config.state.chainId.toString()}`,
-        );
+        setStatus(ErrorStatus(new Error("No address found!")));
+        return;
       }
       switch (props.type) {
         case EvmApiType.Read: {
@@ -175,7 +195,17 @@ const useRunButton = <ParameterName extends string>({
             })
               .then(({ request }) => writeContract(config, request))
               .then((result) => {
-                setStatus(Results(result));
+                const explorer = config.chains.find(
+                  (chain) => chain.id === config.state.chainId,
+                )?.blockExplorers?.default;
+                setStatus(
+                  Results({
+                    hash: result,
+                    link: explorer
+                      ? new URL(`/tx/${result}`, explorer.url).toString()
+                      : undefined,
+                  }),
+                );
               })
               .catch((error: unknown) => {
                 setStatus(ErrorStatus(error));

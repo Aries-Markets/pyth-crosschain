@@ -1,41 +1,16 @@
 use {
     crate::{
-        api::{
-            get_register_uri,
-            ChainId,
-        },
-        chain::ethereum::{
-            ProviderInfo,
-            SignablePythContract,
-        },
-        command::register_provider::{
-            register_provider_from_config,
-            CommitmentMetadata,
-        },
-        config::{
-            Config,
-            EthereumConfig,
-            SetupProviderOptions,
-        },
-        state::{
-            HashChainState,
-            PebbleHashChain,
-        },
+        api::{get_register_uri, ChainId},
+        chain::ethereum::{EntropyStructsProviderInfo, SignablePythContract},
+        command::register_provider::{register_provider_from_config, CommitmentMetadata},
+        config::{Config, EthereumConfig, SetupProviderOptions},
+        state::{HashChainState, PebbleHashChain},
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
+    anyhow::{anyhow, Result},
     ethers::{
         abi::Bytes as AbiBytes,
-        signers::{
-            LocalWallet,
-            Signer,
-        },
-        types::{
-            Address,
-            Bytes,
-        },
+        signers::{LocalWallet, Signer},
+        types::{Address, Bytes},
     },
     futures::future::join_all,
     std::sync::Arc,
@@ -79,7 +54,6 @@ pub async fn setup_provider(opts: &SetupProviderOptions) -> Result<()> {
     }
 }
 
-
 /// Setup provider for a single chain.
 /// 1. Register if there was no previous registration.
 /// 2. Re-register if there are no more random numbers to request on the contract.
@@ -99,7 +73,7 @@ async fn setup_chain_provider(
     ))?;
     let provider_address = private_key.clone().parse::<LocalWallet>()?.address();
     // Initialize a Provider to interface with the EVM contract.
-    let contract = Arc::new(SignablePythContract::from_config(&chain_config, &private_key).await?);
+    let contract = Arc::new(SignablePythContract::from_config(chain_config, &private_key).await?);
 
     tracing::info!("Fetching provider info");
     let provider_info = contract.get_provider_info(provider_address).call().await?;
@@ -138,22 +112,22 @@ async fn setup_chain_provider(
             );
             register = true;
         } else {
-            let hash_chain = PebbleHashChain::from_config(
+            let hash_chain = PebbleHashChain::from_config_async(
                 &secret,
-                &chain_id,
+                chain_id,
                 &provider_address,
                 &chain_config.contract_addr,
                 &metadata.seed,
                 provider_config.chain_length,
                 provider_config.chain_sample_interval,
-            )?;
-            let chain_state = HashChainState {
-                offsets:     vec![provider_info
+            )
+            .await?;
+            let chain_state = HashChainState::new(
+                vec![provider_info
                     .original_commitment_sequence_number
                     .try_into()?],
-                hash_chains: vec![hash_chain],
-            };
-
+                vec![hash_chain],
+            )?;
 
             if chain_state.reveal(provider_info.original_commitment_sequence_number)?
                 != provider_info.original_commitment
@@ -167,20 +141,21 @@ async fn setup_chain_provider(
     }
     if register {
         tracing::info!("Registering");
-        register_provider_from_config(&provider_config, &chain_id, &chain_config)
+        register_provider_from_config(provider_config, chain_id, chain_config)
             .await
             .map_err(|e| anyhow!("Chain: {} - Failed to register provider: {}", &chain_id, e))?;
         tracing::info!("Registered");
     }
 
-
     let provider_info = contract.get_provider_info(provider_address).call().await?;
 
-    sync_fee(&contract, &provider_info, chain_config.fee)
-        .in_current_span()
-        .await?;
+    if register || !chain_config.sync_fee_only_on_register {
+        sync_fee(&contract, &provider_info, chain_config.fee)
+            .in_current_span()
+            .await?;
+    }
 
-    let uri = get_register_uri(&provider_config.uri, &chain_id)?;
+    let uri = get_register_uri(&provider_config.uri, chain_id)?;
     sync_uri(&contract, &provider_info, uri)
         .in_current_span()
         .await?;
@@ -206,11 +181,11 @@ async fn setup_chain_provider(
 
 async fn sync_uri(
     contract: &Arc<SignablePythContract>,
-    provider_info: &ProviderInfo,
+    provider_info: &EntropyStructsProviderInfo,
     uri: String,
 ) -> Result<()> {
     let uri_as_bytes: Bytes = AbiBytes::from(uri.as_str()).into();
-    if &provider_info.uri != &uri_as_bytes {
+    if provider_info.uri != uri_as_bytes {
         tracing::info!("Updating provider uri to {}", uri);
         if let Some(receipt) = contract
             .set_provider_uri(uri_as_bytes)
@@ -226,7 +201,7 @@ async fn sync_uri(
 
 async fn sync_fee(
     contract: &Arc<SignablePythContract>,
-    provider_info: &ProviderInfo,
+    provider_info: &EntropyStructsProviderInfo,
     provider_fee: u128,
 ) -> Result<()> {
     if provider_info.fee_in_wei != provider_fee {
@@ -245,7 +220,7 @@ async fn sync_fee(
 
 async fn sync_fee_manager(
     contract: &Arc<SignablePythContract>,
-    provider_info: &ProviderInfo,
+    provider_info: &EntropyStructsProviderInfo,
     fee_manager: Address,
 ) -> Result<()> {
     if provider_info.fee_manager != fee_manager {
@@ -257,10 +232,9 @@ async fn sync_fee_manager(
     Ok(())
 }
 
-
 async fn sync_max_num_hashes(
     contract: &Arc<SignablePythContract>,
-    provider_info: &ProviderInfo,
+    provider_info: &EntropyStructsProviderInfo,
     max_num_hashes: u32,
 ) -> Result<()> {
     if provider_info.max_num_hashes != max_num_hashes {

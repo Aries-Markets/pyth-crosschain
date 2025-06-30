@@ -1,6 +1,7 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DefaultStore, PrivateKey, toPrivateKey } from "../src";
+import { PrivateKey, toPrivateKey } from "../src/core/base";
+import { DefaultStore } from "../src/node/utils/store";
 
 const parser = yargs(hideBin(process.argv))
   .usage("Usage: $0 --private-key <private-key> [--chain <chain>]")
@@ -25,16 +26,14 @@ type AccountBalance = {
 
 async function getBalance(
   chain: string,
-  privateKey: PrivateKey
+  privateKey: PrivateKey,
 ): Promise<AccountBalance | undefined> {
-  const address = await DefaultStore.chains[chain].getAccountAddress(
-    privateKey
-  );
+  const address =
+    await DefaultStore.chains[chain].getAccountAddress(privateKey);
 
   try {
-    const balance = await DefaultStore.chains[chain].getAccountBalance(
-      privateKey
-    );
+    const balance =
+      await DefaultStore.chains[chain].getAccountBalance(privateKey);
     return { chain, address, balance };
   } catch (e) {
     console.error(`Error fetching balance for ${chain}`, e);
@@ -51,7 +50,7 @@ async function main() {
   const privateKey = toPrivateKey(argv["private-key"]);
 
   const balances = await Promise.all(
-    chains.map((chain) => getBalance(chain, privateKey))
+    chains.map((chain) => getBalance(chain, privateKey)),
   );
 
   console.table(balances);

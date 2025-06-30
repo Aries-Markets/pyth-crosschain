@@ -1,74 +1,49 @@
+use anyhow::Context;
+use log::warn;
 #[cfg(test)]
-use mock_instant::{
-    SystemTime,
-    UNIX_EPOCH,
-};
+use mock_instant::{SystemTime, UNIX_EPOCH};
+use pythnet_sdk::messages::TwapMessage;
+
 #[cfg(not(test))]
-use std::time::{
-    SystemTime,
-    UNIX_EPOCH,
-};
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use {
     self::wormhole_merkle::{
-        construct_message_states_proofs,
-        construct_update_data,
-        store_wormhole_merkle_verified_message,
-        WormholeMerkleMessageProof,
-        WormholeMerkleState,
+        construct_message_states_proofs, construct_update_data,
+        store_wormhole_merkle_verified_message, WormholeMerkleMessageProof, WormholeMerkleState,
     },
     crate::{
+        api::types::{ParsedPublisherStakeCap, ParsedPublisherStakeCapsUpdate},
         network::wormhole::VaaBytes,
         state::{
             benchmarks::Benchmarks,
-            cache::{
-                Cache,
-                MessageState,
-                MessageStateFilter,
-            },
+            cache::{Cache, MessageState, MessageStateFilter},
             price_feeds_metadata::PriceFeedMeta,
             State,
         },
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
+    anyhow::{anyhow, Result},
     borsh::BorshDeserialize,
     byteorder::BigEndian,
     prometheus_client::registry::Registry,
-    pyth_sdk::{
-        Price,
-        PriceFeed,
-        PriceIdentifier,
-    },
+    pyth_sdk::{Price, PriceFeed, PriceIdentifier},
     pythnet_sdk::{
-        messages::{
-            Message,
-            MessageType,
-        },
+        messages::{Message, MessageType, PUBLISHER_STAKE_CAPS_MESSAGE_FEED_ID},
         wire::{
             from_slice,
-            v1::{
-                WormholeMessage,
-                WormholePayload,
-            },
+            v1::{WormholeMessage, WormholePayload},
         },
     },
+    rust_decimal::Decimal,
     serde::Serialize,
-    std::{
-        collections::HashSet,
-        time::Duration,
-    },
+    solana_sdk::pubkey::Pubkey,
+    std::{collections::HashSet, time::Duration},
     tokio::sync::{
-        broadcast::{
-            Receiver,
-            Sender,
-        },
+        broadcast::{Receiver, Sender},
         RwLock,
     },
     wormhole_sdk::Vaa,
 };
-
 pub mod metrics;
 pub mod wormhole_merkle;
 
@@ -87,6 +62,7 @@ pub type UnixTimestamp = i64;
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum RequestTime {
     Latest,
+    LatestTimeEarliestSlot,
     FirstAfter(UnixTimestamp),
     AtSlot(Slot),
 }
@@ -152,7 +128,7 @@ impl AggregateStateData {
 }
 
 pub struct AggregateState {
-    pub data:          RwLock<AggregateStateData>,
+    pub data: RwLock<AggregateStateData>,
     pub api_update_tx: Sender<AggregationEvent>,
 }
 
@@ -164,7 +140,7 @@ impl AggregateState {
         metrics_registry: &mut Registry,
     ) -> Self {
         Self {
-            data:          RwLock::new(AggregateStateData::new(
+            data: RwLock::new(AggregateStateData::new(
                 readiness_staleness_threshold,
                 readiness_max_allowed_slot_lag,
                 metrics_registry,
@@ -182,15 +158,16 @@ impl AggregateState {
 /// uses little-endian byte order.
 #[derive(Clone, PartialEq, Debug, BorshDeserialize)]
 pub struct AccumulatorMessages {
-    pub magic:        [u8; 4],
-    pub slot:         u64,
-    pub ring_size:    u32,
+    pub magic: [u8; 4],
+    pub slot: u64,
+    pub ring_size: u32,
     pub raw_messages: Vec<RawMessage>,
 }
 
 impl AccumulatorMessages {
+    #[allow(clippy::cast_possible_truncation, reason = "intended truncation")]
     pub fn ring_index(&self) -> u32 {
-        (self.slot % self.ring_size as u64) as u32
+        (self.slot % u64::from(self.ring_size)) as u32
     }
 }
 
@@ -201,11 +178,20 @@ pub enum Update {
 }
 
 #[derive(Debug, PartialEq)]
+pub struct PriceFeedTwap {
+    pub id: PriceIdentifier,
+    pub start_timestamp: UnixTimestamp,
+    pub end_timestamp: UnixTimestamp,
+    pub twap: Price,
+    pub down_slots_ratio: Decimal,
+}
+
+#[derive(Debug, PartialEq)]
 pub struct PriceFeedUpdate {
-    pub price_feed:        PriceFeed,
-    pub slot:              Option<Slot>,
-    pub received_at:       Option<UnixTimestamp>,
-    pub update_data:       Option<Vec<u8>>,
+    pub price_feed: PriceFeed,
+    pub slot: Option<Slot>,
+    pub received_at: Option<UnixTimestamp>,
+    pub update_data: Option<Vec<u8>>,
     pub prev_publish_time: Option<UnixTimestamp>,
 }
 
@@ -215,15 +201,27 @@ pub struct PriceFeedsWithUpdateData {
     pub update_data: Vec<Vec<u8>>,
 }
 
+#[derive(Debug, PartialEq)]
+pub struct PublisherStakeCapsWithUpdateData {
+    pub publisher_stake_caps: Vec<ParsedPublisherStakeCapsUpdate>,
+    pub update_data: Vec<Vec<u8>>,
+}
+
+#[derive(Debug)]
+pub struct TwapsWithUpdateData {
+    pub twaps: Vec<PriceFeedTwap>,
+    pub update_data: Vec<Vec<u8>>,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ReadinessMetadata {
-    pub has_completed_recently:          bool,
-    pub is_not_behind:                   bool,
-    pub is_metadata_loaded:              bool,
-    pub latest_completed_slot:           Option<Slot>,
-    pub latest_observed_slot:            Option<Slot>,
+    pub has_completed_recently: bool,
+    pub is_not_behind: bool,
+    pub is_metadata_loaded: bool,
+    pub latest_completed_slot: Option<Slot>,
+    pub latest_observed_slot: Option<Slot>,
     pub latest_completed_unix_timestamp: Option<UnixTimestamp>,
-    pub price_feeds_metadata_len:        usize,
+    pub price_feeds_metadata_len: usize,
 }
 
 #[async_trait::async_trait]
@@ -235,13 +233,22 @@ where
 {
     fn subscribe(&self) -> Receiver<AggregationEvent>;
     async fn is_ready(&self) -> (bool, ReadinessMetadata);
-    async fn store_update(&self, update: Update) -> Result<()>;
+    async fn store_update(&self, update: Update) -> Result<bool>;
     async fn get_price_feed_ids(&self) -> HashSet<PriceIdentifier>;
     async fn get_price_feeds_with_update_data(
         &self,
         price_ids: &[PriceIdentifier],
         request_time: RequestTime,
     ) -> Result<PriceFeedsWithUpdateData>;
+    async fn get_latest_publisher_stake_caps_with_update_data(
+        &self,
+    ) -> Result<PublisherStakeCapsWithUpdateData>;
+    async fn get_twaps_with_update_data(
+        &self,
+        price_ids: &[PriceIdentifier],
+        window_seconds: u64,
+        end_time: RequestTime,
+    ) -> Result<TwapsWithUpdateData>;
 }
 
 /// Allow downcasting State into CacheState for functions that depend on the `Cache` service.
@@ -267,7 +274,7 @@ where
 
     /// Stores the update data in the store
     #[tracing::instrument(skip(self, update))]
-    async fn store_update(&self, update: Update) -> Result<()> {
+    async fn store_update(&self, update: Update) -> Result<bool> {
         // The slot that the update is originating from. It should be available
         // in all the updates.
         let slot = match update {
@@ -279,12 +286,22 @@ where
                     WormholePayload::Merkle(proof) => {
                         tracing::info!(slot = proof.slot, "Storing VAA Merkle Proof.");
 
-                        store_wormhole_merkle_verified_message(
+                        // Store the wormhole merkle verified message and check if it was already stored
+                        let is_new = store_wormhole_merkle_verified_message(
                             self,
                             proof.clone(),
                             update_vaa.to_owned(),
                         )
                         .await?;
+
+                        // If the message was already stored, return early
+                        if !is_new {
+                            tracing::info!(
+                                slot = proof.slot,
+                                "VAA Merkle Proof already stored, skipping."
+                            );
+                            return Ok(false);
+                        }
 
                         self.into()
                             .data
@@ -301,8 +318,21 @@ where
                 let slot = accumulator_messages.slot;
                 tracing::info!(slot = slot, "Storing Accumulator Messages.");
 
-                self.store_accumulator_messages(accumulator_messages)
+                // Store the accumulator messages and check if they were already stored in a single operation
+                // This avoids the race condition where multiple threads could check and find nothing
+                // but then both store the same messages
+                let is_new = self
+                    .store_accumulator_messages(accumulator_messages)
                     .await?;
+
+                // If the messages were already stored, return early
+                if !is_new {
+                    tracing::info!(
+                        slot = slot,
+                        "Accumulator Messages already stored, skipping."
+                    );
+                    return Ok(false);
+                }
 
                 self.into()
                     .data
@@ -328,7 +358,7 @@ where
                 (Some(accumulator_messages), Some(wormhole_merkle_state)) => {
                     (accumulator_messages, wormhole_merkle_state)
                 }
-                _ => return Ok(()),
+                _ => return Ok(true),
             };
 
         tracing::info!(slot = wormhole_merkle_state.root.slot, "Completed Update.");
@@ -348,27 +378,22 @@ where
         // Update the aggregate state
         let mut aggregate_state = self.into().data.write().await;
 
-        // Send update event to subscribers. We are purposefully ignoring the result
-        // because there might be no subscribers.
-        let _ = match aggregate_state.latest_completed_slot {
+        // Atomic check and update
+        let event = match aggregate_state.latest_completed_slot {
             None => {
-                aggregate_state.latest_completed_slot.replace(slot);
-                self.into()
-                    .api_update_tx
-                    .send(AggregationEvent::New { slot })
+                aggregate_state.latest_completed_slot = Some(slot);
+                AggregationEvent::New { slot }
             }
             Some(latest) if slot > latest => {
                 self.prune_removed_keys(message_state_keys).await;
-                aggregate_state.latest_completed_slot.replace(slot);
-                self.into()
-                    .api_update_tx
-                    .send(AggregationEvent::New { slot })
+                aggregate_state.latest_completed_slot = Some(slot);
+                AggregationEvent::New { slot }
             }
-            _ => self
-                .into()
-                .api_update_tx
-                .send(AggregationEvent::OutOfOrder { slot }),
+            _ => AggregationEvent::OutOfOrder { slot },
         };
+
+        // Only send the event after the state has been updated
+        let _ = self.into().api_update_tx.send(event);
 
         aggregate_state.latest_completed_slot = aggregate_state
             .latest_completed_slot
@@ -383,7 +408,25 @@ where
             .metrics
             .observe(slot, metrics::Event::CompletedUpdate);
 
-        Ok(())
+        Ok(true)
+    }
+
+    async fn get_twaps_with_update_data(
+        &self,
+        price_ids: &[PriceIdentifier],
+        window_seconds: u64,
+        end_time: RequestTime,
+    ) -> Result<TwapsWithUpdateData> {
+        match get_verified_twaps_with_update_data(self, price_ids, window_seconds, end_time.clone())
+            .await
+        {
+            Ok(twaps_with_update_data) => Ok(twaps_with_update_data),
+            Err(e) => {
+                // TODO: Hit benchmarks if data not found in the cache
+                tracing::debug!("Update data not found in cache, falling back to Benchmarks");
+                Err(e)
+            }
+        }
     }
 
     async fn get_price_feeds_with_update_data(
@@ -403,10 +446,46 @@ where
         }
     }
 
+    async fn get_latest_publisher_stake_caps_with_update_data(
+        &self,
+    ) -> Result<PublisherStakeCapsWithUpdateData> {
+        let messages = self
+            .fetch_message_states(
+                vec![PUBLISHER_STAKE_CAPS_MESSAGE_FEED_ID],
+                RequestTime::Latest,
+                MessageStateFilter::Only(MessageType::PublisherStakeCapsMessage),
+            )
+            .await?;
+
+        let publisher_stake_caps = messages
+            .iter()
+            .map(|message_state| match message_state.message.clone() {
+                Message::PublisherStakeCapsMessage(message) => Ok(ParsedPublisherStakeCapsUpdate {
+                    publisher_stake_caps: message
+                        .caps
+                        .iter()
+                        .map(|cap| ParsedPublisherStakeCap {
+                            publisher: Pubkey::from(cap.publisher).to_string(),
+                            cap: cap.cap,
+                        })
+                        .collect(),
+                }),
+                _ => Err(anyhow!("Invalid message state type")),
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let update_data = construct_update_data(messages.into_iter().map(|m| m.into()).collect())?;
+        Ok(PublisherStakeCapsWithUpdateData {
+            publisher_stake_caps,
+            update_data,
+        })
+    }
+
     async fn get_price_feed_ids(&self) -> HashSet<PriceIdentifier> {
         Cache::message_state_keys(self)
             .await
             .iter()
+            .filter(|key| key.feed_id != PUBLISHER_STAKE_CAPS_MESSAGE_FEED_ID)
             .map(|key| PriceIdentifier::new(key.feed_id))
             .collect()
     }
@@ -415,7 +494,12 @@ where
         let state_data = self.into().data.read().await;
         let price_feeds_metadata = PriceFeedMeta::retrieve_price_feeds_metadata(self)
             .await
-            .unwrap();
+            .unwrap_or_else(|err| {
+                tracing::error!(
+                    "unexpected failure of PriceFeedMeta::retrieve_price_feeds_metadata(self): {err}"
+                );
+                Vec::new()
+            });
 
         let current_time = SystemTime::now();
 
@@ -452,8 +536,8 @@ where
                 latest_completed_unix_timestamp: state_data.latest_completed_update_time.and_then(
                     |t| {
                         t.duration_since(UNIX_EPOCH)
-                            .map(|d| d.as_secs() as i64)
                             .ok()
+                            .and_then(|d| d.as_secs().try_into().ok())
                     },
                 ),
                 price_feeds_metadata_len: price_feeds_metadata.len(),
@@ -470,7 +554,11 @@ fn build_message_states(
     let wormhole_merkle_message_states_proofs =
         construct_message_states_proofs(&accumulator_messages, &wormhole_merkle_state)?;
 
-    let current_time: UnixTimestamp = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as _;
+    let current_time: UnixTimestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_secs()
+        .try_into()
+        .context("timestamp overflow")?;
 
     accumulator_messages
         .raw_messages
@@ -517,24 +605,24 @@ where
         .iter()
         .map(|message_state| match message_state.message {
             Message::PriceFeedMessage(price_feed) => Ok(PriceFeedUpdate {
-                price_feed:        PriceFeed::new(
+                price_feed: PriceFeed::new(
                     PriceIdentifier::new(price_feed.feed_id),
                     Price {
-                        price:        price_feed.price,
-                        conf:         price_feed.conf,
-                        expo:         price_feed.exponent,
+                        price: price_feed.price,
+                        conf: price_feed.conf,
+                        expo: price_feed.exponent,
                         publish_time: price_feed.publish_time,
                     },
                     Price {
-                        price:        price_feed.ema_price,
-                        conf:         price_feed.ema_conf,
-                        expo:         price_feed.exponent,
+                        price: price_feed.ema_price,
+                        conf: price_feed.ema_conf,
+                        expo: price_feed.exponent,
                         publish_time: price_feed.publish_time,
                     },
                 ),
-                received_at:       Some(message_state.received_at),
-                slot:              Some(message_state.slot),
-                update_data:       Some(
+                received_at: Some(message_state.received_at),
+                slot: Some(message_state.slot),
+                update_data: Some(
                     construct_update_data(vec![message_state.clone().into()])?
                         .into_iter()
                         .next()
@@ -554,42 +642,216 @@ where
     })
 }
 
+async fn get_verified_twaps_with_update_data<S>(
+    state: &S,
+    price_ids: &[PriceIdentifier],
+    window_seconds: u64,
+    end_time: RequestTime,
+) -> Result<TwapsWithUpdateData>
+where
+    S: Cache,
+{
+    // Get all end messages for all price IDs
+    let end_messages = state
+        .fetch_message_states(
+            price_ids.iter().map(|id| id.to_bytes()).collect(),
+            end_time.clone(),
+            MessageStateFilter::Only(MessageType::TwapMessage),
+        )
+        .await?;
+
+    // Calculate start_time based on the publish time of the end messages
+    // to guarantee that the start and end messages are window_seconds apart
+    let start_timestamp = if end_messages.is_empty() {
+        // If there are no end messages, we can't calculate a TWAP
+        tracing::warn!(
+            price_ids = ?price_ids,
+            time = ?end_time,
+            "Could not find TWAP messages"
+        );
+        return Err(anyhow!(
+            "Update data not found for the specified timestamps"
+        ));
+    } else {
+        // Use the publish time from the first end message
+        end_messages
+            .first()
+            .context("no messages found")?
+            .message
+            .publish_time()
+            - i64::try_from(window_seconds).context("window size overflow")?
+    };
+    let start_time = RequestTime::FirstAfter(start_timestamp);
+
+    // Get all start messages for all price IDs
+    let start_messages = state
+        .fetch_message_states(
+            price_ids.iter().map(|id| id.to_bytes()).collect(),
+            start_time.clone(),
+            MessageStateFilter::Only(MessageType::TwapMessage),
+        )
+        .await?;
+
+    if start_messages.is_empty() {
+        tracing::warn!(
+            price_ids = ?price_ids,
+            time = ?start_time,
+            "Could not find TWAP messages"
+        );
+        return Err(anyhow!(
+            "Update data not found for the specified timestamps"
+        ));
+    }
+
+    // Verify we have matching start and end messages.
+    // The cache should throw an error earlier, but checking just in case.
+    if start_messages.len() != end_messages.len() {
+        tracing::warn!(
+            price_ids = ?price_ids,
+            start_message_length = ?price_ids,
+            end_message_length = ?start_time,
+            "Start and end messages length mismatch"
+        );
+        return Err(anyhow!(
+            "Update data not found for the specified timestamps"
+        ));
+    }
+
+    let mut twaps = Vec::new();
+
+    // Iterate through start and end messages together
+    for (start_message, end_message) in start_messages.iter().zip(end_messages.iter()) {
+        if let (Message::TwapMessage(start_twap), Message::TwapMessage(end_twap)) =
+            (&start_message.message, &end_message.message)
+        {
+            match calculate_twap(start_twap, end_twap) {
+                Ok(twap_price) => {
+                    // down_slots_ratio describes the % of slots where the network was down
+                    // over the TWAP window. A value closer to zero indicates higher confidence.
+                    let total_slots = end_twap.publish_slot - start_twap.publish_slot;
+                    let total_down_slots = end_twap.num_down_slots - start_twap.num_down_slots;
+                    let down_slots_ratio =
+                        Decimal::from(total_down_slots) / Decimal::from(total_slots);
+
+                    // Add to calculated TWAPs
+                    twaps.push(PriceFeedTwap {
+                        id: PriceIdentifier::new(start_twap.feed_id),
+                        twap: twap_price,
+                        start_timestamp: start_twap.publish_time,
+                        end_timestamp: end_twap.publish_time,
+                        down_slots_ratio,
+                    });
+                }
+                Err(e) => {
+                    tracing::error!(
+                        feed_id = ?start_twap.feed_id,
+                        error = %e,
+                        "Failed to calculate TWAP for price feed"
+                    );
+                    return Err(anyhow!(
+                        "Failed to calculate TWAP for price feed {:?}: {}",
+                        start_twap.feed_id,
+                        e
+                    ));
+                }
+            }
+        }
+    }
+
+    // Construct update data.
+    // update_data[0] contains the start VAA and merkle proofs
+    // update_data[1] contains the end VAA and merkle proofs
+    let mut update_data =
+        construct_update_data(start_messages.into_iter().map(Into::into).collect())?;
+    update_data.extend(construct_update_data(
+        end_messages.into_iter().map(Into::into).collect(),
+    )?);
+
+    Ok(TwapsWithUpdateData { twaps, update_data })
+}
+
+fn calculate_twap(start_message: &TwapMessage, end_message: &TwapMessage) -> Result<Price> {
+    if end_message.publish_slot <= start_message.publish_slot {
+        return Err(anyhow!(
+            "Cannot calculate TWAP - end slot must be greater than start slot"
+        ));
+    }
+
+    // Validate that messages are the first ones in their timestamp
+    // This is necessary to ensure that this TWAP is deterministic,
+    // Since there can be multiple messages in a single second.
+    if start_message.prev_publish_time >= start_message.publish_time {
+        return Err(anyhow!(
+            "Start message is not the first update for its timestamp"
+        ));
+    }
+
+    if end_message.prev_publish_time >= end_message.publish_time {
+        return Err(anyhow!(
+            "End message is not the first update for its timestamp"
+        ));
+    }
+
+    let slot_diff = end_message
+        .publish_slot
+        .checked_sub(start_message.publish_slot)
+        .ok_or_else(|| anyhow!("Slot difference overflow"))?;
+
+    let price_diff = end_message
+        .cumulative_price
+        .checked_sub(start_message.cumulative_price)
+        .ok_or_else(|| anyhow!("Price difference overflow"))?;
+
+    let conf_diff = end_message
+        .cumulative_conf
+        .checked_sub(start_message.cumulative_conf)
+        .ok_or_else(|| anyhow!("Confidence difference overflow"))?;
+
+    // Perform division before casting to maintain precision
+    // Cast slot_diff to the same type as price / conf diff before division
+    let price = i64::try_from(price_diff / i128::from(slot_diff))
+        .map_err(|e| anyhow!("Price overflow after division: {}", e))?;
+    let conf = u64::try_from(conf_diff / u128::from(slot_diff))
+        .map_err(|e| anyhow!("Confidence overflow after division: {}", e))?;
+
+    Ok(Price {
+        price,
+        conf,
+        expo: end_message.exponent,
+        publish_time: end_message.publish_time,
+    })
+}
+
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    reason = "tests"
+)]
 mod test {
     use {
         super::*,
         crate::{
-            api::types::{
-                PriceFeedMetadata,
-                RpcPriceIdentifier,
-            },
+            api::types::{PriceFeedMetadata, RpcPriceIdentifier},
             state::test::setup_state,
         },
         futures::future::join_all,
         mock_instant::MockClock,
         pythnet_sdk::{
             accumulators::{
-                merkle::{
-                    MerkleRoot,
-                    MerkleTree,
-                },
+                merkle::{MerkleRoot, MerkleTree},
                 Accumulator,
             },
             hashers::keccak256_160::Keccak160,
             messages::PriceFeedMessage,
-            wire::v1::{
-                AccumulatorUpdateData,
-                Proof,
-                WormholeMerkleRoot,
-            },
+            wire::v1::{AccumulatorUpdateData, Proof, WormholeMerkleRoot},
         },
         rand::seq::SliceRandom,
+        rust_decimal::prelude::FromPrimitive,
         serde_wormhole::RawMessage,
         std::sync::Arc,
-        wormhole_sdk::{
-            Address,
-            Chain,
-        },
+        wormhole_sdk::{Address, Chain},
     };
 
     /// Generate list of updates for the given list of messages at a given slot with given sequence
@@ -643,7 +905,6 @@ mod test {
 
         updates
     }
-
     /// Create a dummy price feed base on the given seed for all the fields except
     /// `publish_time` and `prev_publish_time`. Those are set to the given value.
     pub fn create_dummy_price_feed_message(
@@ -653,11 +914,11 @@ mod test {
     ) -> PriceFeedMessage {
         PriceFeedMessage {
             feed_id: [seed; 32],
-            price: seed as _,
-            conf: seed as _,
+            price: seed.into(),
+            conf: seed.into(),
             exponent: 0,
-            ema_conf: seed as _,
-            ema_price: seed as _,
+            ema_conf: seed.into(),
+            ema_price: seed.into(),
             publish_time,
             prev_publish_time,
         }
@@ -711,24 +972,24 @@ mod test {
         assert_eq!(
             price_feeds_with_update_data.price_feeds,
             vec![PriceFeedUpdate {
-                price_feed:        PriceFeed::new(
+                price_feed: PriceFeed::new(
                     PriceIdentifier::new(price_feed_message.feed_id),
                     Price {
-                        price:        price_feed_message.price,
-                        conf:         price_feed_message.conf,
-                        expo:         price_feed_message.exponent,
+                        price: price_feed_message.price,
+                        conf: price_feed_message.conf,
+                        expo: price_feed_message.exponent,
                         publish_time: price_feed_message.publish_time,
                     },
                     Price {
-                        price:        price_feed_message.ema_price,
-                        conf:         price_feed_message.ema_conf,
-                        expo:         price_feed_message.exponent,
+                        price: price_feed_message.ema_price,
+                        conf: price_feed_message.ema_conf,
+                        expo: price_feed_message.exponent,
                         publish_time: price_feed_message.publish_time,
                     }
                 ),
-                slot:              Some(10),
-                received_at:       price_feeds_with_update_data.price_feeds[0].received_at, // Ignore checking this field.
-                update_data:       price_feeds_with_update_data.price_feeds[0]
+                slot: Some(10),
+                received_at: price_feeds_with_update_data.price_feeds[0].received_at, // Ignore checking this field.
+                update_data: price_feeds_with_update_data.price_feeds[0]
                     .update_data
                     .clone(), // Ignore checking this field.
                 prev_publish_time: Some(9),
@@ -747,16 +1008,16 @@ mod test {
                 assert_eq!(
                     vaa,
                     Vaa {
-                        nonce:              0,
-                        version:            0,
-                        sequence:           20,
-                        timestamp:          0,
-                        signatures:         vec![],
+                        nonce: 0,
+                        version: 0,
+                        sequence: 20,
+                        timestamp: 0,
+                        signatures: vec![],
                         guardian_set_index: 0,
-                        emitter_chain:      Chain::Pythnet,
-                        emitter_address:    Address(pythnet_sdk::ACCUMULATOR_EMITTER_ADDRESS),
-                        consistency_level:  0,
-                        payload:            vaa.payload, // Ignore checking this field.
+                        emitter_chain: Chain::Pythnet,
+                        emitter_address: Address(pythnet_sdk::ACCUMULATOR_EMITTER_ADDRESS),
+                        consistency_level: 0,
+                        payload: vaa.payload, // Ignore checking this field.
                     }
                 );
                 let merkle_root = WormholeMessage::try_from_bytes(vaa.payload.as_ref()).unwrap();
@@ -764,9 +1025,9 @@ mod test {
                 assert_eq!(
                     merkle_root,
                     WormholeMerkleRoot {
-                        slot:      10,
+                        slot: 10,
                         ring_size: 100,
-                        root:      merkle_root.root, // Ignore checking this field.
+                        root: merkle_root.root, // Ignore checking this field.
                     }
                 );
 
@@ -917,11 +1178,10 @@ mod test {
             Some(unix_timestamp as i64)
         );
 
-
         // Add a dummy price feeds metadata
         state
             .store_price_feeds_metadata(&[PriceFeedMetadata {
-                id:         RpcPriceIdentifier::new([100; 32]),
+                id: RpcPriceIdentifier::new([100; 32]),
                 attributes: Default::default(),
             }])
             .await
@@ -1001,10 +1261,468 @@ mod test {
                         PriceIdentifier::new([100; 32]),
                         PriceIdentifier::new([200; 32])
                     ],
-                    RequestTime::FirstAfter(slot as i64),
+                    RequestTime::FirstAfter(slot.into()),
                 )
                 .await
                 .is_err());
         }
+    }
+
+    /// Helper function to create a TWAP message with basic defaults
+    pub(crate) fn create_basic_twap_message(
+        feed_id: [u8; 32],
+        cumulative_price: i128,
+        num_down_slots: u64,
+        publish_time: i64,
+        prev_publish_time: i64,
+        publish_slot: u64,
+    ) -> Message {
+        Message::TwapMessage(TwapMessage {
+            feed_id,
+            cumulative_price,
+            cumulative_conf: 100,
+            num_down_slots,
+            exponent: 8,
+            publish_time,
+            prev_publish_time,
+            publish_slot,
+        })
+    }
+
+    #[tokio::test]
+    async fn test_get_verified_twaps_with_update_data_returns_correct_prices() {
+        let (state, _update_rx) = setup_state(10).await;
+        let feed_id_1 = [1u8; 32];
+        let feed_id_2 = [2u8; 32];
+
+        // Store start TWAP messages for both feeds
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![
+                    create_basic_twap_message(
+                        feed_id_1, 100,  // cumulative_price
+                        0,    // num_down_slots
+                        100,  // publish_time
+                        90,   // prev_publish_time
+                        1000, // publish_slot
+                    ),
+                    create_basic_twap_message(
+                        feed_id_2, 500,  // cumulative_price
+                        10,   // num_down_slots
+                        100,  // publish_time
+                        90,   // prev_publish_time
+                        1000, // publish_slot
+                    ),
+                ],
+                1000,
+                20,
+            ),
+        )
+        .await;
+
+        // Store end TWAP messages for both feeds
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![
+                    create_basic_twap_message(
+                        feed_id_1, 300,  // cumulative_price
+                        50,   // num_down_slots
+                        200,  // publish_time
+                        180,  // prev_publish_time
+                        1100, // publish_slot
+                    ),
+                    create_basic_twap_message(
+                        feed_id_2, 900,  // cumulative_price
+                        30,   // num_down_slots
+                        200,  // publish_time
+                        180,  // prev_publish_time
+                        1100, // publish_slot
+                    ),
+                ],
+                1100,
+                21,
+            ),
+        )
+        .await;
+
+        // Get TWAPs over timestamp window 100 -> 200 for both feeds
+        let result = get_verified_twaps_with_update_data(
+            &*state,
+            &[
+                PriceIdentifier::new(feed_id_1),
+                PriceIdentifier::new(feed_id_2),
+            ],
+            100,                          // window seconds
+            RequestTime::FirstAfter(200), // End time
+        )
+        .await
+        .unwrap();
+
+        // Verify calculations are accurate for both feeds
+        assert_eq!(result.twaps.len(), 2);
+
+        // Verify feed 1
+        let twap_1 = result
+            .twaps
+            .iter()
+            .find(|t| t.id == PriceIdentifier::new(feed_id_1))
+            .unwrap();
+        assert_eq!(twap_1.twap.price, 2); // (300-100)/(1100-1000) = 2
+        assert_eq!(twap_1.down_slots_ratio, Decimal::from_f64(0.5).unwrap()); // (50-0)/(1100-1000) = 0.5
+        assert_eq!(twap_1.start_timestamp, 100);
+        assert_eq!(twap_1.end_timestamp, 200);
+
+        // Verify feed 2
+        let twap_2 = result
+            .twaps
+            .iter()
+            .find(|t| t.id == PriceIdentifier::new(feed_id_2))
+            .unwrap();
+        assert_eq!(twap_2.twap.price, 4); // (900-500)/(1100-1000) = 4
+        assert_eq!(twap_2.down_slots_ratio, Decimal::from_f64(0.2).unwrap()); // (30-10)/(1100-1000) = 0.2
+        assert_eq!(twap_2.start_timestamp, 100);
+        assert_eq!(twap_2.end_timestamp, 200);
+
+        // update_data should have 2 elements, one for the start block and one for the end block.
+        assert_eq!(result.update_data.len(), 2);
+    }
+
+    #[tokio::test]
+    /// Tests that the TWAP calculation correctly selects TWAP messages that are the first ones
+    /// for their timestamp (non-optional prices). This is important because if a message such that
+    /// `publish_time == prev_publish_time`is chosen, the TWAP calculation will fail due to the optionality check.
+    async fn test_get_verified_twaps_with_update_data_uses_non_optional_prices() {
+        let (state, _update_rx) = setup_state(10).await;
+        let feed_id = [1u8; 32];
+
+        // Store start TWAP message
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![create_basic_twap_message(
+                    feed_id, 100,  // cumulative_price
+                    0,    // num_down_slots
+                    100,  // publish_time
+                    99,   // prev_publish_time
+                    1000, // publish_slot
+                )],
+                1000,
+                20,
+            ),
+        )
+        .await;
+
+        // Store end TWAP messages
+
+        // This first message has the latest publish_time and earliest slot,
+        // so it should be chosen as the end_message to calculate TWAP with.
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![create_basic_twap_message(
+                    feed_id, 300,  // cumulative_price
+                    50,   // num_down_slots
+                    200,  // publish_time
+                    180,  // prev_publish_time
+                    1100, // publish_slot
+                )],
+                1100,
+                21,
+            ),
+        )
+        .await;
+
+        // This second message has the same publish_time as the previous one and a later slot.
+        // It will fail the optionality check since publish_time == prev_publish_time.
+        // Thus, it should not be chosen to calculate TWAP with.
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![create_basic_twap_message(
+                    feed_id, 900,  // cumulative_price
+                    50,   // num_down_slots
+                    200,  // publish_time
+                    200,  // prev_publish_time
+                    1101, // publish_slot
+                )],
+                1101,
+                22,
+            ),
+        )
+        .await;
+
+        // Get TWAPs over timestamp window 100 -> 200
+        let result = get_verified_twaps_with_update_data(
+            &*state,
+            &[PriceIdentifier::new(feed_id)],
+            100,                                 // window seconds
+            RequestTime::LatestTimeEarliestSlot, // End time
+        )
+        .await
+        .unwrap();
+
+        // Verify that the first end message was chosen to calculate the TWAP
+        // and that the calculation is accurate
+        assert_eq!(result.twaps.len(), 1);
+        let twap_1 = result
+            .twaps
+            .iter()
+            .find(|t| t.id == PriceIdentifier::new(feed_id))
+            .unwrap();
+        assert_eq!(twap_1.twap.price, 2); // (300-100)/(1100-1000) = 2
+        assert_eq!(twap_1.down_slots_ratio, Decimal::from_f64(0.5).unwrap()); // (50-0)/(1100-1000) = 0.5
+        assert_eq!(twap_1.start_timestamp, 100);
+        assert_eq!(twap_1.end_timestamp, 200);
+
+        // update_data should have 2 elements, one for the start block and one for the end block.
+        assert_eq!(result.update_data.len(), 2);
+    }
+    #[tokio::test]
+
+    async fn test_get_verified_twaps_with_missing_messages_throws_error() {
+        let (state, _update_rx) = setup_state(10).await;
+        let feed_id_1 = [1u8; 32];
+        let feed_id_2 = [2u8; 32];
+
+        // Store both messages for feed_1
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![
+                    create_basic_twap_message(
+                        feed_id_1, 100,  // cumulative_price
+                        0,    // num_down_slots
+                        100,  // publish_time
+                        90,   // prev_publish_time
+                        1000, // publish_slot
+                    ),
+                    create_basic_twap_message(
+                        feed_id_2, 500,  // cumulative_price
+                        0,    // num_down_slots
+                        100,  // publish_time
+                        90,   // prev_publish_time
+                        1000, // publish_slot
+                    ),
+                ],
+                1000,
+                20,
+            ),
+        )
+        .await;
+
+        // Store end message only for feed_1 (feed_2 missing end message)
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(
+                vec![create_basic_twap_message(
+                    feed_id_1, 300,  // cumulative_price
+                    0,    // num_down_slots
+                    200,  // publish_time
+                    180,  // prev_publish_time
+                    1100, // publish_slot
+                )],
+                1100,
+                21,
+            ),
+        )
+        .await;
+
+        let result = get_verified_twaps_with_update_data(
+            &*state,
+            &[
+                PriceIdentifier::new(feed_id_1),
+                PriceIdentifier::new(feed_id_2),
+            ],
+            100,
+            RequestTime::FirstAfter(200),
+        )
+        .await;
+
+        assert_eq!(result.unwrap_err().to_string(), "Message not found");
+    }
+
+    /// Test that verifies only one event is sent per slot, even when updates arrive out of order
+    /// or when a slot is processed multiple times.
+    #[tokio::test]
+    pub async fn test_out_of_order_updates_send_single_event_per_slot() {
+        let (state, mut update_rx) = setup_state(10).await;
+
+        // Create price feed messages
+        let price_feed_100 = create_dummy_price_feed_message(100, 10, 9);
+        let price_feed_101 = create_dummy_price_feed_message(100, 11, 10);
+
+        // First, process slot 100
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(vec![Message::PriceFeedMessage(price_feed_100)], 100, 20),
+        )
+        .await;
+
+        // Check that we received the New event for slot 100
+        assert_eq!(
+            update_rx.recv().await,
+            Ok(AggregationEvent::New { slot: 100 })
+        );
+
+        // Next, process slot 101
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(vec![Message::PriceFeedMessage(price_feed_101)], 101, 21),
+        )
+        .await;
+
+        // Check that we received the New event for slot 101
+        assert_eq!(
+            update_rx.recv().await,
+            Ok(AggregationEvent::New { slot: 101 })
+        );
+
+        // Now, process slot 100 again
+        store_multiple_concurrent_valid_updates(
+            state.clone(),
+            generate_update(vec![Message::PriceFeedMessage(price_feed_100)], 100, 22),
+        )
+        .await;
+
+        // Try to receive another event with a timeout to ensure no more events were sent
+        // We should not receive an OutOfOrder event for slot 100 since we've already sent an event for it
+        let timeout_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), update_rx.recv()).await;
+
+        // The timeout should occur, indicating no more events were received
+        assert!(
+            timeout_result.is_err(),
+            "Received unexpected additional event"
+        );
+
+        // Verify that both price feeds were stored correctly
+        let price_feed_ids = (*state).get_price_feed_ids().await;
+        assert_eq!(price_feed_ids.len(), 1);
+        assert!(price_feed_ids.contains(&PriceIdentifier::new([100; 32])));
+    }
+
+    /// Test that verifies only one event is sent when multiple concurrent updates
+    /// for the same slot are processed.
+    #[tokio::test]
+    pub async fn test_concurrent_updates_same_slot_sends_single_event() {
+        let (state, mut update_rx) = setup_state(10).await;
+
+        // Create a single price feed message
+        let price_feed = create_dummy_price_feed_message(100, 10, 9);
+
+        // Generate 100 identical updates for the same slot but with different sequence numbers
+        let mut all_updates = Vec::new();
+        for seq in 0..100 {
+            let updates = generate_update(vec![Message::PriceFeedMessage(price_feed)], 10, seq);
+            all_updates.extend(updates);
+        }
+
+        // Process updates concurrently - we don't care if some fail due to the race condition
+        // The important thing is that only one event is sent
+        let state_arc = Arc::clone(&state);
+        let futures = all_updates.into_iter().map(move |u| {
+            let state_clone = Arc::clone(&state_arc);
+            async move {
+                let _ = state_clone.store_update(u).await;
+            }
+        });
+        futures::future::join_all(futures).await;
+
+        // Check that only one AggregationEvent::New is received
+        assert_eq!(
+            update_rx.recv().await,
+            Ok(AggregationEvent::New { slot: 10 })
+        );
+
+        // Try to receive another event with a timeout to ensure no more events were sent
+        let timeout_result =
+            tokio::time::timeout(std::time::Duration::from_millis(100), update_rx.recv()).await;
+
+        // The timeout should occur, indicating no more events were received
+        assert!(
+            timeout_result.is_err(),
+            "Received unexpected additional event"
+        );
+
+        // Verify that the price feed was stored correctly
+        let price_feed_ids = (*state).get_price_feed_ids().await;
+        assert_eq!(price_feed_ids.len(), 1);
+        assert!(price_feed_ids.contains(&PriceIdentifier::new([100; 32])));
+    }
+}
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests")]
+/// Unit tests for the core TWAP calculation logic in `calculate_twap`
+mod calculate_twap_unit_tests {
+    use super::*;
+
+    fn create_basic_twap_message(
+        cumulative_price: i128,
+        publish_time: i64,
+        prev_publish_time: i64,
+        publish_slot: u64,
+    ) -> TwapMessage {
+        TwapMessage {
+            feed_id: [0; 32],
+            cumulative_price,
+            cumulative_conf: 100,
+            num_down_slots: 0,
+            exponent: 8,
+            publish_time,
+            prev_publish_time,
+            publish_slot,
+        }
+    }
+
+    #[test]
+    fn test_valid_twap() {
+        let start = create_basic_twap_message(100, 100, 90, 1000);
+        let end = create_basic_twap_message(300, 200, 180, 1100);
+
+        let price = calculate_twap(&start, &end).unwrap();
+        assert_eq!(price.price, 2); // (300-100)/(1100-1000) = 2
+    }
+    #[test]
+    fn test_invalid_slot_order() {
+        let start = create_basic_twap_message(100, 100, 90, 1100);
+        let end = create_basic_twap_message(300, 200, 180, 1000);
+
+        let err = calculate_twap(&start, &end).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Cannot calculate TWAP - end slot must be greater than start slot"
+        );
+    }
+
+    #[test]
+    fn test_invalid_timestamps() {
+        let start = create_basic_twap_message(100, 100, 110, 1000);
+        let end = create_basic_twap_message(300, 200, 180, 1100);
+
+        let err = calculate_twap(&start, &end).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "Start message is not the first update for its timestamp"
+        );
+
+        let start = create_basic_twap_message(100, 100, 90, 1000);
+        let end = create_basic_twap_message(300, 200, 200, 1100);
+
+        let err = calculate_twap(&start, &end).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "End message is not the first update for its timestamp"
+        );
+    }
+
+    #[test]
+    fn test_overflow() {
+        let start = create_basic_twap_message(i128::MIN, 100, 90, 1000);
+        let end = create_basic_twap_message(i128::MAX, 200, 180, 1100);
+
+        let err = calculate_twap(&start, &end).unwrap_err();
+        assert_eq!(err.to_string(), "Price difference overflow");
     }
 }

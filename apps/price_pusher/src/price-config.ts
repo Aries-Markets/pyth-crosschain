@@ -1,4 +1,4 @@
-import { HexString } from "@pythnetwork/price-service-client";
+import { HexString } from "@pythnetwork/hermes-client";
 import Joi from "joi";
 import YAML from "yaml";
 import fs from "fs";
@@ -21,7 +21,7 @@ const PriceConfigFileSchema: Joi.Schema = Joi.array()
         price_deviation: Joi.number().optional(),
         confidence_ratio: Joi.number().optional(),
       }).optional(),
-    })
+    }),
   )
   .unique("id")
   .unique("alias")
@@ -92,19 +92,22 @@ export function shouldUpdate(
   priceConfig: PriceConfig,
   sourceLatestPrice: PriceInfo | undefined,
   targetLatestPrice: PriceInfo | undefined,
-  logger: Logger
+  logger: Logger,
 ): UpdateCondition {
   const priceId = priceConfig.id;
 
-  // There is no price to update the target with.
+  // There is no price to update the target with. So we should not update it.
   if (sourceLatestPrice === undefined) {
-    return UpdateCondition.YES;
+    logger.info(
+      `${priceConfig.alias} (${priceId}) is not available on the source network. Ignoring it.`,
+    );
+    return UpdateCondition.NO;
   }
 
   // It means that price never existed there. So we should push the latest price feed.
   if (targetLatestPrice === undefined) {
     logger.info(
-      `${priceConfig.alias} (${priceId}) is not available on the target network. Pushing the price.`
+      `${priceConfig.alias} (${priceId}) is not available on the target network. Pushing the price.`,
     );
     return UpdateCondition.YES;
   }
@@ -119,16 +122,20 @@ export function shouldUpdate(
 
   const priceDeviationPct =
     (Math.abs(
-      Number(sourceLatestPrice.price) - Number(targetLatestPrice.price)
+      Number(sourceLatestPrice.price) - Number(targetLatestPrice.price),
     ) /
       Number(targetLatestPrice.price)) *
     100;
   const confidenceRatioPct = Math.abs(
-    (Number(sourceLatestPrice.conf) / Number(sourceLatestPrice.price)) * 100
+    (Number(sourceLatestPrice.conf) / Number(sourceLatestPrice.price)) * 100,
   );
 
   logger.info(
-    { sourcePrice: sourceLatestPrice, targetPrice: targetLatestPrice },
+    {
+      sourcePrice: sourceLatestPrice,
+      targetPrice: targetLatestPrice,
+      symbol: priceConfig.alias,
+    },
     `Analyzing price ${priceConfig.alias} (${priceId}). ` +
       `Time difference: ${timeDifference} (< ${priceConfig.timeDifference}? / early: < ${priceConfig.earlyUpdateTimeDifference}) OR ` +
       `Price deviation: ${priceDeviationPct.toFixed(5)}% (< ${
@@ -136,7 +143,7 @@ export function shouldUpdate(
       }%? / early: < ${priceConfig.earlyUpdatePriceDeviation}%?) OR ` +
       `Confidence ratio: ${confidenceRatioPct.toFixed(5)}% (< ${
         priceConfig.confidenceRatio
-      }%? / early: < ${priceConfig.earlyUpdatePriceDeviation}%?)`
+      }%? / early: < ${priceConfig.earlyUpdateConfidenceRatio}%?)`,
   );
 
   if (

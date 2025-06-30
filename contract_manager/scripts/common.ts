@@ -1,16 +1,12 @@
-import {
-  DefaultStore,
-  EvmChain,
-  EvmEntropyContract,
-  EvmWormholeContract,
-  getDefaultDeploymentConfig,
-  PrivateKey,
-} from "../src";
+import { DefaultStore } from "../src/node/utils/store";
 import { existsSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import Web3 from "web3";
 import { Contract } from "web3-eth-contract";
 import { InferredOptionType } from "yargs";
+import { PrivateKey, getDefaultDeploymentConfig } from "../src/core/base";
+import { EvmChain } from "../src/core/chains";
+import { EvmEntropyContract, EvmWormholeContract } from "../src/core/contracts";
 
 export interface BaseDeployConfig {
   gasMultiplier: number;
@@ -29,23 +25,38 @@ export async function deployIfNotCached(
   config: BaseDeployConfig,
   artifactName: string,
   deployArgs: any[], // eslint-disable-line  @typescript-eslint/no-explicit-any
-  cacheKey?: string
+  cacheKey?: string,
 ): Promise<string> {
   const runIfNotCached = makeCacheFunction(cacheFile);
   const key = cacheKey ?? `${chain.getId()}-${artifactName}`;
   return runIfNotCached(key, async () => {
     const artifact = JSON.parse(
-      readFileSync(join(config.jsonOutputDir, `${artifactName}.json`), "utf8")
+      readFileSync(join(config.jsonOutputDir, `${artifactName}.json`), "utf8"),
     );
+
+    // Handle bytecode which can be either a string or an object with an 'object' property
+    let bytecode = artifact["bytecode"];
+    if (
+      typeof bytecode === "object" &&
+      bytecode !== null &&
+      "object" in bytecode
+    ) {
+      bytecode = bytecode.object;
+    }
+
+    // Ensure bytecode starts with 0x
+    if (!bytecode.startsWith("0x")) {
+      bytecode = `0x${bytecode}`;
+    }
 
     console.log(`Deploying ${artifactName} on ${chain.getId()}...`);
     const addr = await chain.deploy(
       config.privateKey,
       artifact["abi"],
-      artifact["bytecode"],
+      bytecode,
       deployArgs,
       config.gasMultiplier,
-      config.gasPriceMultiplier
+      config.gasPriceMultiplier,
     );
     console.log(`✅ Deployed ${artifactName} on ${chain.getId()} at ${addr}`);
 
@@ -56,10 +67,10 @@ export async function deployIfNotCached(
 export function getWeb3Contract(
   jsonOutputDir: string,
   artifactName: string,
-  address: string
+  address: string,
 ): Contract {
   const artifact = JSON.parse(
-    readFileSync(join(jsonOutputDir, `${artifactName}.json`), "utf8")
+    readFileSync(join(jsonOutputDir, `${artifactName}.json`), "utf8"),
   );
   const web3 = new Web3();
   return new web3.eth.Contract(artifact["abi"], address);
@@ -78,6 +89,7 @@ export const COMMON_DEPLOY_OPTIONS = {
   },
   chain: {
     type: "array",
+    string: true,
     demandOption: true,
     desc: "Chains to upload the contract on. Must be one of the chains available in the store",
   },
@@ -140,11 +152,11 @@ export const COMMON_UPGRADE_OPTIONS = {
 } as const;
 
 export function makeCacheFunction(
-  cacheFile: string
+  cacheFile: string,
 ): (cacheKey: string, fn: () => Promise<string>) => Promise<string> {
   async function runIfNotCached(
     cacheKey: string,
-    fn: () => Promise<string>
+    fn: () => Promise<string>,
   ): Promise<string> {
     const cache = existsSync(cacheFile)
       ? JSON.parse(readFileSync(cacheFile, "utf8"))
@@ -162,9 +174,9 @@ export function makeCacheFunction(
 }
 
 export function getSelectedChains(argv: {
-  chain: InferredOptionType<typeof COMMON_UPGRADE_OPTIONS["chain"]>;
-  testnet: InferredOptionType<typeof COMMON_UPGRADE_OPTIONS["testnet"]>;
-  allChains: InferredOptionType<typeof COMMON_UPGRADE_OPTIONS["all-chains"]>;
+  chain: InferredOptionType<(typeof COMMON_UPGRADE_OPTIONS)["chain"]>;
+  testnet: InferredOptionType<(typeof COMMON_UPGRADE_OPTIONS)["testnet"]>;
+  allChains: InferredOptionType<(typeof COMMON_UPGRADE_OPTIONS)["all-chains"]>;
 }) {
   const selectedChains: EvmChain[] = [];
   if (argv.allChains && argv.chain)
@@ -183,7 +195,7 @@ export function getSelectedChains(argv: {
     throw new Error(
       `Some chains were not found ${selectedChains
         .map((chain) => chain.getId())
-        .toString()}`
+        .toString()}`,
     );
   for (const chain of selectedChains) {
     if (chain.isMainnet() != selectedChains[0].isMainnet())
@@ -208,28 +220,12 @@ export function findEntropyContract(chain: EvmChain): EvmEntropyContract {
 }
 
 /**
- * Finds an EVM chain by its name.
- * @param {string} chainName The name of the chain to find.
- * @returns The EVM chain instance.
- * @throws {Error} an error if the chain is not found or is not an EVM chain.
- */
-export function findEvmChain(chainName: string): EvmChain {
-  const chain = DefaultStore.chains[chainName];
-  if (!chain) {
-    throw new Error(`Chain ${chainName} not found`);
-  } else if (!(chain instanceof EvmChain)) {
-    throw new Error(`Chain ${chainName} is not an EVM chain`);
-  }
-  return chain;
-}
-
-/**
  * Finds the wormhole contract for a given EVM chain.
  * @param {EvmChain} chain The EVM chain to find the wormhole contract for.
  * @returns If found, the wormhole contract for the given EVM chain. Else, undefined
  */
 export function findWormholeContract(
-  chain: EvmChain
+  chain: EvmChain,
 ): EvmWormholeContract | undefined {
   for (const contract of Object.values(DefaultStore.wormhole_contracts)) {
     if (
@@ -256,14 +252,14 @@ export interface DeployWormholeReceiverContractsConfig
 export async function deployWormholeContract(
   chain: EvmChain,
   config: DeployWormholeReceiverContractsConfig,
-  cacheFile: string
+  cacheFile: string,
 ): Promise<EvmWormholeContract> {
   const receiverSetupAddr = await deployIfNotCached(
     cacheFile,
     chain,
     config,
     "ReceiverSetup",
-    []
+    [],
   );
 
   const receiverImplAddr = await deployIfNotCached(
@@ -271,14 +267,14 @@ export async function deployWormholeContract(
     chain,
     config,
     "ReceiverImplementation",
-    []
+    [],
   );
 
   // Craft the init data for the proxy contract
   const setupContract = getWeb3Contract(
     config.jsonOutputDir,
     "ReceiverSetup",
-    receiverSetupAddr
+    receiverSetupAddr,
   );
 
   const { wormholeConfig } = getDefaultDeploymentConfig(config.type);
@@ -289,7 +285,7 @@ export async function deployWormholeContract(
       wormholeConfig.initialGuardianSet.map((addr: string) => "0x" + addr),
       chain.getWormholeChainId(),
       wormholeConfig.governanceChainId,
-      "0x" + wormholeConfig.governanceContract
+      "0x" + wormholeConfig.governanceContract,
     )
     .encodeABI();
 
@@ -298,7 +294,7 @@ export async function deployWormholeContract(
     chain,
     config,
     "WormholeReceiver",
-    [receiverSetupAddr, initData]
+    [receiverSetupAddr, initData],
   );
 
   const wormholeContract = new EvmWormholeContract(chain, wormholeReceiverAddr);
@@ -330,10 +326,59 @@ export async function deployWormholeContract(
 export async function getOrDeployWormholeContract(
   chain: EvmChain,
   config: DeployWormholeReceiverContractsConfig,
-  cacheFile: string
+  cacheFile: string,
 ): Promise<EvmWormholeContract> {
   return (
     findWormholeContract(chain) ??
     (await deployWormholeContract(chain, config, cacheFile))
   );
+}
+
+export interface DefaultAddresses {
+  mainnet: string;
+  testnet: string;
+}
+
+export async function topupAccountsIfNecessary(
+  chain: EvmChain,
+  deploymentConfig: BaseDeployConfig,
+  accounts: Array<[string, DefaultAddresses]>,
+  minBalance = 0.01,
+) {
+  for (const [accountName, defaultAddresses] of accounts) {
+    const accountAddress = chain.isMainnet()
+      ? defaultAddresses.mainnet
+      : defaultAddresses.testnet;
+    const web3 = chain.getWeb3();
+    const balance = Number(
+      web3.utils.fromWei(await web3.eth.getBalance(accountAddress), "ether"),
+    );
+    console.log(`${accountName} balance: ${balance} ETH`);
+    if (balance < minBalance) {
+      console.log(
+        `Balance is less than ${minBalance}. Topping up the ${accountName} address...`,
+      );
+      const signer = web3.eth.accounts.privateKeyToAccount(
+        deploymentConfig.privateKey,
+      );
+      web3.eth.accounts.wallet.add(signer);
+      const estimatedGas = await web3.eth.estimateGas({
+        from: signer.address,
+        to: accountAddress,
+        value: web3.utils.toWei(`${minBalance}`, "ether"),
+      });
+
+      const tx = await web3.eth.sendTransaction({
+        from: signer.address,
+        to: accountAddress,
+        gas: estimatedGas * deploymentConfig.gasMultiplier,
+        value: web3.utils.toWei(`${minBalance}`, "ether"),
+      });
+
+      console.log(
+        `Topped up the ${accountName} address. Tx: `,
+        tx.transactionHash,
+      );
+    }
+  }
 }

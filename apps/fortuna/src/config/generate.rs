@@ -1,11 +1,7 @@
 use {
-    crate::{
-        api::ChainId,
-        config::ConfigOptions,
-    },
+    crate::{api::ChainId, config::ConfigOptions},
     clap::Args,
     ethers::types::Address,
-    reqwest::Url,
 };
 
 #[derive(Args, Clone, Debug)]
@@ -30,11 +26,4 @@ pub struct GenerateOptions {
     /// Submit a randomness request to this provider
     #[arg(long = "provider")]
     pub provider: Address,
-
-    #[arg(long = "url")]
-    #[arg(default_value = super::DEFAULT_HTTP_ADDR)]
-    pub url: Url,
-
-    #[arg(short = 'b')]
-    pub blockhash: bool,
 }

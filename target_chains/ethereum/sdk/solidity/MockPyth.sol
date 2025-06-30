@@ -4,6 +4,7 @@ pragma solidity ^0.8.0;
 import "./AbstractPyth.sol";
 import "./PythStructs.sol";
 import "./PythErrors.sol";
+import "./PythUtils.sol";
 
 contract MockPyth is AbstractPyth {
     mapping(bytes32 => PythStructs.PriceFeed) priceFeeds;
@@ -79,17 +80,30 @@ contract MockPyth is AbstractPyth {
         return singleUpdateFeeInWei * updateData.length;
     }
 
-    function parsePriceFeedUpdatesInternal(
+    function getTwapUpdateFee(
+        bytes[] calldata updateData
+    ) public view override returns (uint feeAmount) {
+        return singleUpdateFeeInWei * updateData.length;
+    }
+
+    function parsePriceFeedUpdatesWithConfig(
         bytes[] calldata updateData,
         bytes32[] calldata priceIds,
-        uint64 minPublishTime,
-        uint64 maxPublishTime,
-        bool unique
-    ) internal returns (PythStructs.PriceFeed[] memory feeds) {
+        uint64 minAllowedPublishTime,
+        uint64 maxAllowedPublishTime,
+        bool checkUniqueness,
+        bool checkUpdateDataIsMinimal,
+        bool storeUpdatesIfFresh
+    )
+        public
+        payable
+        returns (PythStructs.PriceFeed[] memory feeds, uint64[] memory slots)
+    {
         uint requiredFee = getUpdateFee(updateData);
         if (msg.value < requiredFee) revert PythErrors.InsufficientFee();
 
         feeds = new PythStructs.PriceFeed[](priceIds.length);
+        slots = new uint64[](priceIds.length);
 
         for (uint i = 0; i < priceIds.length; i++) {
             for (uint j = 0; j < updateData.length; j++) {
@@ -100,6 +114,7 @@ contract MockPyth is AbstractPyth {
                 );
 
                 uint publishTime = feeds[i].price.publishTime;
+                slots[i] = uint64(publishTime); // use PublishTime as mock slot
                 if (priceFeeds[feeds[i].id].price.publishTime < publishTime) {
                     priceFeeds[feeds[i].id] = feeds[i];
                     emit PriceFeedUpdate(
@@ -112,9 +127,10 @@ contract MockPyth is AbstractPyth {
 
                 if (feeds[i].id == priceIds[i]) {
                     if (
-                        minPublishTime <= publishTime &&
-                        publishTime <= maxPublishTime &&
-                        (!unique || prevPublishTime < minPublishTime)
+                        minAllowedPublishTime <= publishTime &&
+                        publishTime <= maxAllowedPublishTime &&
+                        (!checkUniqueness ||
+                            prevPublishTime < minAllowedPublishTime)
                     ) {
                         break;
                     } else {
@@ -134,14 +150,15 @@ contract MockPyth is AbstractPyth {
         uint64 minPublishTime,
         uint64 maxPublishTime
     ) external payable override returns (PythStructs.PriceFeed[] memory feeds) {
-        return
-            parsePriceFeedUpdatesInternal(
-                updateData,
-                priceIds,
-                minPublishTime,
-                maxPublishTime,
-                false
-            );
+        (feeds, ) = parsePriceFeedUpdatesWithConfig(
+            updateData,
+            priceIds,
+            minPublishTime,
+            maxPublishTime,
+            false,
+            true,
+            false
+        );
     }
 
     function parsePriceFeedUpdatesUnique(
@@ -150,14 +167,115 @@ contract MockPyth is AbstractPyth {
         uint64 minPublishTime,
         uint64 maxPublishTime
     ) external payable override returns (PythStructs.PriceFeed[] memory feeds) {
-        return
-            parsePriceFeedUpdatesInternal(
-                updateData,
-                priceIds,
-                minPublishTime,
-                maxPublishTime,
-                true
-            );
+        (feeds, ) = parsePriceFeedUpdatesWithConfig(
+            updateData,
+            priceIds,
+            minPublishTime,
+            maxPublishTime,
+            false,
+            true,
+            false
+        );
+    }
+
+    function parseTwapPriceFeedUpdates(
+        bytes[] calldata updateData,
+        bytes32[] calldata priceIds
+    )
+        external
+        payable
+        override
+        returns (PythStructs.TwapPriceFeed[] memory twapPriceFeeds)
+    {
+        uint requiredFee = getUpdateFee(updateData);
+        if (msg.value < requiredFee) revert PythErrors.InsufficientFee();
+
+        twapPriceFeeds = new PythStructs.TwapPriceFeed[](priceIds.length);
+
+        // Process each price ID
+        for (uint i = 0; i < priceIds.length; i++) {
+            processTwapPriceFeed(updateData, priceIds[i], i, twapPriceFeeds);
+        }
+
+        return twapPriceFeeds;
+    }
+
+    // You can create this data either by calling createTwapPriceFeedUpdateData.
+    // @note: The updateData expected here is different from the one used in the main contract.
+    // In particular, the expected format is:
+    // [
+    //     abi.encode(
+    //         bytes32 id,
+    //         PythStructs.TwapPriceInfo startInfo,
+    //         PythStructs.TwapPriceInfo endInfo
+    //     )
+    // ]
+    function processTwapPriceFeed(
+        bytes[] calldata updateData,
+        bytes32 priceId,
+        uint index,
+        PythStructs.TwapPriceFeed[] memory twapPriceFeeds
+    ) private {
+        // Decode TWAP feed directly
+        PythStructs.TwapPriceFeed memory twapFeed = abi.decode(
+            updateData[0],
+            (PythStructs.TwapPriceFeed)
+        );
+
+        // Validate ID matches
+        if (twapFeed.id != priceId)
+            revert PythErrors.InvalidTwapUpdateDataSet();
+
+        // Store the TWAP feed
+        twapPriceFeeds[index] = twapFeed;
+
+        // Emit event
+        emit TwapPriceFeedUpdate(
+            priceId,
+            twapFeed.startTime,
+            twapFeed.endTime,
+            twapFeed.twap.price,
+            twapFeed.twap.conf,
+            twapFeed.downSlotsRatio
+        );
+    }
+
+    /**
+     * @notice Creates TWAP price feed update data with simplified parameters for testing
+     * @param id The price feed ID
+     * @param startTime Start time of the TWAP
+     * @param endTime End time of the TWAP
+     * @param price The price value
+     * @param conf The confidence interval
+     * @param expo Price exponent
+     * @param downSlotsRatio Down slots ratio
+     * @return twapData Encoded TWAP price feed data ready for parseTwapPriceFeedUpdates
+     */
+    function createTwapPriceFeedUpdateData(
+        bytes32 id,
+        uint64 startTime,
+        uint64 endTime,
+        int64 price,
+        uint64 conf,
+        int32 expo,
+        uint32 downSlotsRatio
+    ) public pure returns (bytes memory twapData) {
+        PythStructs.Price memory twapPrice = PythStructs.Price({
+            price: price,
+            conf: conf,
+            expo: expo,
+            publishTime: endTime
+        });
+
+        PythStructs.TwapPriceFeed memory twapFeed = PythStructs.TwapPriceFeed({
+            id: id,
+            startTime: startTime,
+            endTime: endTime,
+            twap: twapPrice,
+            downSlotsRatio: downSlotsRatio
+        });
+
+        twapData = abi.encode(twapFeed);
     }
 
     function createPriceFeedUpdateData(

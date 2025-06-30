@@ -8,25 +8,18 @@ import { ArrowPathIcon } from "@heroicons/react/24/outline";
 import base58 from "bs58";
 import clsx from "clsx";
 import Image from "next/image";
-import {
-  type ChangeEvent,
-  type Dispatch,
-  type SetStateAction,
-  useState,
-  useCallback,
-  useMemo,
-  useEffect,
-} from "react";
+import type { ChangeEvent, Dispatch, SetStateAction } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 
+import type { Parameter } from "./parameter";
 import {
-  type Parameter,
   PLACEHOLDERS,
   isValid,
   getValidationError,
   ParameterType,
 } from "./parameter";
+import type { PriceFeed } from "../../use-price-feed-list";
 import {
-  type PriceFeed,
   PriceFeedListContextType,
   usePriceFeedList,
 } from "../../use-price-feed-list";
@@ -137,11 +130,8 @@ const PriceFeedListOptions = ({ priceFeedList }: PriceFeedListOptionsProps) => {
       </div>
     ) : (
       <ComboboxOptions className="h-80 overflow-y-auto py-1" modal={false}>
-        {({ option }) => {
-          // The `option` parameter is typed as `unknown` and we have to
-          // cast to get it to be correctly typed, see
-          // https://github.com/tailwindlabs/headlessui/issues/3326
-          const { feedId, name, description } = option as PriceFeed;
+        {({ option }: { option: PriceFeed }) => {
+          const { feedId, name, description } = option;
           return (
             <ComboboxOption
               key={feedId}

@@ -1,16 +1,16 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DefaultStore } from "../src/store";
-import { SubmittedWormholeMessage, Vault } from "../src/governance";
 import { parseVaa } from "@certusone/wormhole-sdk";
 import { decodeGovernancePayload } from "@pythnetwork/xc-admin-common";
-import { toPrivateKey } from "../src";
+import { toPrivateKey } from "../src/core/base";
+import { SubmittedWormholeMessage, Vault } from "../src/node/utils/governance";
+import { DefaultStore } from "../src/node/utils/store";
 
 const parser = yargs(hideBin(process.argv))
   .usage(
     "Tries to execute all vaas on a contract.\n" +
       "Useful for recently deployed contracts.\n" +
-      "Usage: $0 --contract <contract_id> --private-key <private-key>"
+      "Usage: $0 --contract <contract_id> --private-key <private-key>",
   )
   .options({
     contract: {
@@ -57,7 +57,7 @@ async function main() {
     matchedVault = mainnetVault;
   } else {
     throw new Error(
-      "can not find a multisig that matches the governance source of the contract"
+      "can not find a multisig that matches the governance source of the contract",
     );
   }
   let lastExecuted = await contract.getLastExecutedGovernanceSequence();
@@ -72,7 +72,7 @@ async function main() {
     const submittedWormholeMessage = new SubmittedWormholeMessage(
       await matchedVault.getEmitter(),
       lastExecuted + 1,
-      matchedVault.cluster
+      matchedVault.cluster,
     );
     let vaa: Buffer;
     try {
@@ -93,13 +93,13 @@ async function main() {
       console.log("executing vaa", lastExecuted + 1);
       await contract.executeGovernanceInstruction(
         toPrivateKey(argv["private-key"]),
-        vaa
+        vaa,
       );
     } else {
       console.log(
         `vaa is not for this chain (${
           contract.getChain().wormholeChainName
-        } != ${action.targetChainId}, skipping`
+        } != ${action.targetChainId}, skipping`,
       );
     }
     lastExecuted++;

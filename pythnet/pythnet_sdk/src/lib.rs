@@ -1,6 +1,7 @@
 pub mod accumulators;
 pub mod error;
 pub mod hashers;
+pub mod legacy;
 pub mod messages;
 pub mod wire;
 pub mod wormhole;
@@ -55,10 +56,7 @@ pub(crate) mod tests {
 
     #[test]
     fn test_pubkeys() {
-        use solana_sdk::{
-            pubkey,
-            pubkey::Pubkey,
-        };
+        use solana_sdk::{pubkey, pubkey::Pubkey};
 
         let accumulator_emitter_address = pubkey!("G9LV2mp9ua1znRAfYwZz5cPiJMAbo1T6mbjdQsDZuMJg");
         assert_eq!(

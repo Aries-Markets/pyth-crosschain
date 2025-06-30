@@ -1,4 +1,3 @@
-import { Wallet } from "@coral-xyz/anchor";
 import {
   AddressLookupTableAccount,
   ComputeBudgetProgram,
@@ -14,6 +13,7 @@ import {
 } from "@solana/web3.js";
 import bs58 from "bs58";
 import { buildJitoTipInstruction } from "./jito";
+import type { AnchorWallet } from "@solana/wallet-adapter-react";
 
 /**
  * If the transaction doesn't contain a `setComputeUnitLimit` instruction, the default compute budget is 200,000 units per instruction.
@@ -79,7 +79,7 @@ export const DEFAULT_PRIORITY_FEE_CONFIG: PriorityFeeConfig = {
 export function getSizeOfTransaction(
   instructions: TransactionInstruction[],
   versionedTransaction = true,
-  addressLookupTable?: AddressLookupTableAccount
+  addressLookupTable?: AddressLookupTableAccount,
 ): number {
   const programs = new Set<string>();
   const signers = new Set<string>();
@@ -103,18 +103,20 @@ export function getSizeOfTransaction(
         getSizeOfCompressedU16(ix.keys.length) +
         ix.keys.length +
         getSizeOfCompressedU16(ix.data.length) +
-        ix.data.length
+        ix.data.length,
     )
     .reduce((a, b) => a + b, 0);
 
   let numberOfAddressLookups = 0;
   if (addressLookupTable) {
     const lookupTableAddresses = addressLookupTable.state.addresses.map(
-      (address) => address.toBase58()
+      (address) => address.toBase58(),
     );
     const totalNumberOfAccounts = accounts.size;
     accounts = new Set(
-      [...accounts].filter((account) => !lookupTableAddresses.includes(account))
+      [...accounts].filter(
+        (account) => !lookupTableAddresses.includes(account),
+      ),
     );
     accounts = new Set([...accounts, ...programs, ...signers]);
     numberOfAddressLookups = totalNumberOfAccounts - accounts.size; // This number is equal to the number of accounts that are in the lookup table and are neither signers nor programs
@@ -161,7 +163,7 @@ export class TransactionBuilder {
   constructor(
     payer: PublicKey,
     connection: Connection,
-    addressLookupTable?: AddressLookupTableAccount
+    addressLookupTable?: AddressLookupTableAccount,
   ) {
     this.payer = payer;
     this.connection = connection;
@@ -190,7 +192,7 @@ export class TransactionBuilder {
           ComputeBudgetProgram.setComputeUnitLimit({ units: 1 }),
         ],
         true,
-        this.addressLookupTable
+        this.addressLookupTable,
       );
       if (sizeWithComputeUnits <= PACKET_DATA_SIZE) {
         this.transactionInstructions[
@@ -224,7 +226,7 @@ export class TransactionBuilder {
    * Returns all the added instructions batched into versioned transactions, plus for each transaction the ephemeral signers that need to sign it
    */
   async buildVersionedTransactions(
-    args: PriorityFeeConfig
+    args: PriorityFeeConfig,
   ): Promise<{ tx: VersionedTransaction; signers: Signer[] }[]> {
     const blockhash = (
       await this.connection.getLatestBlockhash({ commitment: "confirmed" })
@@ -243,19 +245,19 @@ export class TransactionBuilder {
           args.tightComputeBudget
         ) {
           instructionsWithComputeBudget.push(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits })
+            ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
           );
         }
         if (args.computeUnitPriceMicroLamports) {
           instructionsWithComputeBudget.push(
             ComputeBudgetProgram.setComputeUnitPrice({
               microLamports: args.computeUnitPriceMicroLamports,
-            })
+            }),
           );
         }
         if (args.jitoTipLamports && index % jitoBundleSize === 0) {
           instructionsWithComputeBudget.push(
-            buildJitoTipInstruction(this.payer, args.jitoTipLamports)
+            buildJitoTipInstruction(this.payer, args.jitoTipLamports),
           );
         }
 
@@ -265,7 +267,7 @@ export class TransactionBuilder {
           const sizeWithInstruction = getSizeOfTransaction(
             [...instructionsToSend, instruction],
             true,
-            this.addressLookupTable
+            this.addressLookupTable,
           );
           if (sizeWithInstruction > PACKET_DATA_SIZE) {
             break;
@@ -280,12 +282,12 @@ export class TransactionBuilder {
               instructions: instructionsToSend,
               payerKey: this.payer,
             }).compileToV0Message(
-              this.addressLookupTable ? [this.addressLookupTable] : []
-            )
+              this.addressLookupTable ? [this.addressLookupTable] : [],
+            ),
           ),
           signers: signers,
         };
-      }
+      },
     );
   }
 
@@ -293,7 +295,7 @@ export class TransactionBuilder {
    * Returns all the added instructions batched into transactions, plus for each transaction the ephemeral signers that need to sign it
    */
   buildLegacyTransactions(
-    args: PriorityFeeConfig
+    args: PriorityFeeConfig,
   ): { tx: Transaction; signers: Signer[] }[] {
     const jitoBundleSize =
       args.jitoBundleSize || this.transactionInstructions.length;
@@ -308,19 +310,19 @@ export class TransactionBuilder {
           args.tightComputeBudget
         ) {
           instructionsWithComputeBudget.push(
-            ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits })
+            ComputeBudgetProgram.setComputeUnitLimit({ units: computeUnits }),
           );
         }
         if (args.computeUnitPriceMicroLamports) {
           instructionsWithComputeBudget.push(
             ComputeBudgetProgram.setComputeUnitPrice({
               microLamports: args.computeUnitPriceMicroLamports,
-            })
+            }),
           );
         }
         if (args.jitoTipLamports && index % jitoBundleSize === 0) {
           instructionsWithComputeBudget.push(
-            buildJitoTipInstruction(this.payer, args.jitoTipLamports)
+            buildJitoTipInstruction(this.payer, args.jitoTipLamports),
           );
         }
 
@@ -329,9 +331,14 @@ export class TransactionBuilder {
         for (const instruction of instructionsWithComputeBudget) {
           const sizeWithInstruction = getSizeOfTransaction(
             [...instructionsToSend, instruction],
-            false
+            false,
           );
           if (sizeWithInstruction > PACKET_DATA_SIZE) {
+            if (instructionsToSend.length == 0) {
+              throw new Error(
+                `An instruction is too big to be sent in a transaction (${sizeWithInstruction} > ${PACKET_DATA_SIZE} bytes)`,
+              );
+            }
             break;
           }
           instructionsToSend.push(instruction);
@@ -341,7 +348,7 @@ export class TransactionBuilder {
           tx: new Transaction().add(...instructionsToSend),
           signers: signers,
         };
-      }
+      },
     );
   }
 
@@ -350,11 +357,11 @@ export class TransactionBuilder {
    */
   static batchIntoLegacyTransactions(
     instructions: TransactionInstruction[],
-    priorityFeeConfig: PriorityFeeConfig
+    priorityFeeConfig: PriorityFeeConfig,
   ): Transaction[] {
     const transactionBuilder = new TransactionBuilder(
       PublicKey.unique(),
-      new Connection("http://placeholder.placeholder")
+      new Connection("http://placeholder.placeholder"),
     ); // We only need wallet and connection for `VersionedTransaction` so we can put placeholders here
     for (const instruction of instructions) {
       transactionBuilder.addInstruction({ instruction, signers: [] });
@@ -374,12 +381,12 @@ export class TransactionBuilder {
     connection: Connection,
     instructions: InstructionWithEphemeralSigners[],
     priorityFeeConfig: PriorityFeeConfig,
-    addressLookupTable?: AddressLookupTableAccount
+    addressLookupTable?: AddressLookupTableAccount,
   ): Promise<{ tx: VersionedTransaction; signers: Signer[] }[]> {
     const transactionBuilder = new TransactionBuilder(
       payer,
       connection,
-      addressLookupTable
+      addressLookupTable,
     );
     transactionBuilder.addInstructions(instructions);
     return transactionBuilder.buildVersionedTransactions(priorityFeeConfig);
@@ -390,20 +397,20 @@ export class TransactionBuilder {
    */
   static addPriorityFee(
     transaction: Transaction,
-    priorityFeeConfig: PriorityFeeConfig
+    priorityFeeConfig: PriorityFeeConfig,
   ) {
     if (priorityFeeConfig.computeUnitPriceMicroLamports) {
       transaction.add(
         ComputeBudgetProgram.setComputeUnitPrice({
           microLamports: priorityFeeConfig.computeUnitPriceMicroLamports,
-        })
+        }),
       );
     }
   }
 }
 
 export const isVersionedTransaction = (
-  tx: Transaction | VersionedTransaction
+  tx: Transaction | VersionedTransaction,
 ): tx is VersionedTransaction => {
   return "version" in tx;
 };
@@ -419,8 +426,8 @@ export async function sendTransactions(
     signers?: Signer[] | undefined;
   }[],
   connection: Connection,
-  wallet: Wallet,
-  maxRetries?: number
+  wallet: AnchorWallet,
+  maxRetries?: number,
 ): Promise<string[]> {
   const blockhashResult = await connection.getLatestBlockhashAndContext({
     commitment: "confirmed",
@@ -460,7 +467,7 @@ export async function sendTransactions(
     const txSignature = bs58.encode(
       isVersionedTransaction(tx)
         ? tx.signatures?.[0] || new Uint8Array()
-        : tx.signature ?? new Uint8Array()
+        : (tx.signature ?? new Uint8Array()),
     );
 
     const confirmTransactionPromise = connection.confirmTransaction(
@@ -469,7 +476,7 @@ export async function sendTransactions(
         blockhash: blockhashResult.value.blockhash,
         lastValidBlockHeight: blockhashResult.value.lastValidBlockHeight,
       },
-      "confirmed"
+      "confirmed",
     );
 
     confirmedTx = null;
@@ -483,7 +490,7 @@ export async function sendTransactions(
         new Promise<null>((resolve) =>
           setTimeout(() => {
             resolve(null);
-          }, TX_RETRY_INTERVAL)
+          }, TX_RETRY_INTERVAL),
         ),
       ]);
       if (confirmedTx) {
@@ -500,7 +507,7 @@ export async function sendTransactions(
         " with signature: ",
         txSignature,
         " Retry count: ",
-        retryCount
+        retryCount,
       );
       retryCount++;
 
@@ -512,14 +519,13 @@ export async function sendTransactions(
         // Set this manually so that the default is skipped
         maxRetries: 0,
         preflightCommitment: "confirmed",
-        minContextSlot: blockhashResult.context.slot,
       });
     }
     if (confirmedTx?.err) {
       throw new Error(
         `Transaction ${txSignature} has failed with error: ${JSON.stringify(
-          confirmedTx.err
-        )}`
+          confirmedTx.err,
+        )}`,
       );
     }
 

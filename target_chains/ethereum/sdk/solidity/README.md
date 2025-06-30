@@ -7,7 +7,7 @@ It is **strongly recommended** to follow the [consumer best practices](https://d
 
 ## Installation
 
-###Truffle/Hardhat
+### Truffle/Hardhat
 
 If you are using Truffle or Hardhat, simply install the NPM package:
 
@@ -15,7 +15,7 @@ If you are using Truffle or Hardhat, simply install the NPM package:
 npm install @pythnetwork/pyth-sdk-solidity
 ```
 
-###Foundry
+### Foundry
 
 If you are using Foundry, you will need to create an NPM project if you don't already have one.
 From the root directory of your project, run:
@@ -57,7 +57,7 @@ contract ExampleContract {
     bytes[] calldata priceUpdateData
   ) public payable returns (PythStructs.Price memory) {
     // Update the prices to the latest available values and pay the required fee for it. The `priceUpdateData` data
-    // should be retrieved from our off-chain Price Service API using the `pyth-evm-js` package.
+    // should be retrieved from our off-chain Price Service API using the `hermes-client` package.
     // See section "How Pyth Works on EVM Chains" below for more information.
     uint fee = pyth.getUpdateFee(priceUpdateData);
     pyth.updatePriceFeeds{ value: fee }(priceUpdateData);
@@ -68,7 +68,6 @@ contract ExampleContract {
     return pyth.getPriceNoOlderThan(priceID, 10);
   }
 }
-
 ```
 
 ## How Pyth Works on EVM Chains
@@ -81,7 +80,7 @@ Please refer to [Pyth On-Demand Updates page](https://docs.pyth.network/document
 
 ## Solidity Target Chains
 
-[This](https://docs.pyth.network/documentation/pythnet-price-feeds/evm#networks) document contains list of the EVM networks that Pyth is available on.
+[This](https://docs.pyth.network/price-feeds/contract-addresses/evm) document contains list of the EVM networks that Pyth is available on.
 
 You can find a list of available price feeds [here](https://pyth.network/developers/price-feed-ids/).
 
@@ -93,7 +92,7 @@ You can find a list of available price feeds [here](https://pyth.network/develop
 
 ### ABIs
 
-When making changes to a contract interface, please make sure to update the ABI files too. You can update it using `npm run generate-abi` and it will update the ABI files in [abis](./abis) directory. If you create a new contract, you also need to add the contract name in [the ABI generation script](./scripts/generateAbi.js#L5) so the script can create the ABI file for the new contract as well.
+When making changes to a contract interface, please make sure to update the ABI files too. You can update it using `pnpm turbo run build:abis` and it will update the ABI files in [abis](./abis) directory.
 
 ### Releases
 

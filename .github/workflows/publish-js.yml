@@ -13,6 +13,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version-file: "package.json"
+      # Libusb is a build requirement for the node-hid package and so pnpm
+      # install will fail if this isn't in the build environment and if a
+      # precompiled binary isn't found.
+      - name: Install libusb
+        run: sudo apt-get update && sudo apt-get install -y libusb-1.0-0-dev libudev-dev
       - uses: pnpm/action-setup@v4
         name: Install pnpm
         with:
@@ -21,5 +26,5 @@ jobs:
         run: pnpm config set '//registry.npmjs.org/:_authToken' "${NODE_AUTH_TOKEN}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - run: pnpm exec lerna run build --no-private
-      - run: pnpm exec lerna publish from-package --no-private --no-git-tag-version --yes
+      - run: pnpm run turbo build
+      - run: pnpm publish -r --no-git-checks

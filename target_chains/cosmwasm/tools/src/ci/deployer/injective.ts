@@ -43,7 +43,7 @@ export class InjectiveDeployer implements Deployer {
         denom: string;
       }[];
       gas: string;
-    } = DEFAULT_STD_FEE
+    } = DEFAULT_STD_FEE,
   ): Promise<TxResponse> {
     const networkInfo = getNetworkInfo(this.network);
 
@@ -68,7 +68,7 @@ export class InjectiveDeployer implements Deployer {
       console.error(`Transaction failed: ${txResponse.rawLog}`);
     } else {
       console.log(
-        `Broadcasted transaction hash: ${JSON.stringify(txResponse.txHash)}`
+        `Broadcasted transaction hash: ${JSON.stringify(txResponse.txHash)}`,
       );
     }
 
@@ -87,12 +87,12 @@ export class InjectiveDeployer implements Deployer {
     const txResponse = await this.signAndBroadcastMsg(store_code, {
       amount: [
         {
-          // gas = 5000000 & gasPrice = 500000000
-          amount: String(500000000 * 5000000),
+          // gas = 5000000 & gasPrice = 160000000
+          amount: String(160000000 * 5000000),
           denom: "inj",
         },
       ],
-      // DEFAULT STD FEE that we use has gas = 400000 and gasPrice = 500000000
+      // DEFAULT STD FEE that we use has gas = 400000 and gasPrice = 160000000
       // But this transaction was taking gas around 3000000. Which is a lot more
       // Keeping the gasPrice same as in default std fee as seen above in amount.
       // Changing the gasLimit to 5000000
@@ -107,7 +107,7 @@ export class InjectiveDeployer implements Deployer {
       codeId = parseInt(ci);
     } catch (e) {
       console.error(
-        "Encountered an error in parsing deploy code result. Printing raw log"
+        "Encountered an error in parsing deploy code result. Printing raw log",
       );
       console.error(txResponse.rawLog);
       throw e;
@@ -119,7 +119,7 @@ export class InjectiveDeployer implements Deployer {
   async instantiate(
     codeId: number,
     inst_msg: object,
-    label: string
+    label: string,
   ): Promise<string> {
     const instantiate_msg = MsgInstantiateContract.fromJSON({
       sender: this.injectiveAddress(),
@@ -136,7 +136,7 @@ export class InjectiveDeployer implements Deployer {
       address = extractFromRawLog(txResponse.rawLog, "contract_address");
     } catch (e) {
       console.error(
-        "Encountered an error in parsing instantiation result. Printing raw log"
+        "Encountered an error in parsing instantiation result. Printing raw log",
       );
       console.error(txResponse.rawLog);
       throw e;
@@ -144,8 +144,8 @@ export class InjectiveDeployer implements Deployer {
 
     console.log(
       `Instantiated Pyth at ${address} (${convert_injective_address_to_hex(
-        address
-      )})`
+        address,
+      )})`,
     );
 
     return address;
@@ -169,7 +169,7 @@ export class InjectiveDeployer implements Deployer {
       assert.strictEqual(codeId, resultCodeId);
     } catch (e) {
       console.error(
-        "Encountered an error in parsing migration result. Printing raw log"
+        "Encountered an error in parsing migration result. Printing raw log",
       );
       console.error(txResponse.rawLog);
       throw e;

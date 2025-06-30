@@ -2,8 +2,11 @@
 pragma solidity ^0.8.0;
 
 import "./EntropyEvents.sol";
+import "./EntropyEventsV2.sol";
+import "./EntropyStructsV2.sol";
+import "./IEntropyV2.sol";
 
-interface IEntropy is EntropyEvents {
+interface IEntropy is EntropyEvents, EntropyEventsV2, IEntropyV2 {
     // Register msg.sender as a randomness provider. The arguments are the provider's configuration parameters
     // and initial commitment. Re-registering the same provider rotates the provider's commitment (and updates
     // the feeInWei).
@@ -48,8 +51,10 @@ interface IEntropy is EntropyEvents {
     //
     // The address calling this function should be a contract that inherits from the IEntropyConsumer interface.
     // The `entropyCallback` method on that interface will receive a callback with the generated random number.
+    // `entropyCallback` will be run with the provider's default gas limit (see `getProviderInfo(provider).defaultGasLimit`).
+    // If your callback needs additional gas, please use `requestWithCallbackAndGasLimit`.
     //
-    // This method will revert unless the caller provides a sufficient fee (at least getFee(provider)) as msg.value.
+    // This method will revert unless the caller provides a sufficient fee (at least `getFee(provider)`) as msg.value.
     // Note that excess value is *not* refunded to the caller.
     function requestWithCallback(
         address provider,
@@ -91,13 +96,13 @@ interface IEntropy is EntropyEvents {
         address provider
     ) external view returns (EntropyStructs.ProviderInfo memory info);
 
-    function getDefaultProvider() external view returns (address provider);
-
     function getRequest(
         address provider,
         uint64 sequenceNumber
     ) external view returns (EntropyStructs.Request memory req);
 
+    // Get the fee charged by provider for a request with the default gasLimit (`request` or `requestWithCallback`).
+    // If you are calling any of the `requestV2` methods, please use `getFeeV2`.
     function getFee(address provider) external view returns (uint128 feeAmount);
 
     function getAccruedPythFees()
@@ -123,6 +128,9 @@ interface IEntropy is EntropyEvents {
     // Set the maximum number of hashes to record in a request. This should be set according to the maximum gas limit
     // the provider supports for callbacks.
     function setMaxNumHashes(uint32 maxNumHashes) external;
+
+    // Set the default gas limit for a request. If 0, no
+    function setDefaultGasLimit(uint32 gasLimit) external;
 
     // Advance the provider commitment and increase the sequence number.
     // This is used to reduce the `numHashes` required for future requests which leads to reduced gas usage.

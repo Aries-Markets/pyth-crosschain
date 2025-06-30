@@ -2,31 +2,15 @@ use {
     crate::{
         api::{
             doc_examples,
-            rest::{
-                verify_price_ids_exist,
-                RestError,
-            },
-            types::{
-                BinaryPriceUpdate,
-                EncodingType,
-                ParsedPriceUpdate,
-                PriceIdInput,
-                PriceUpdate,
-            },
+            rest::{validate_price_ids, RestError},
+            types::{BinaryUpdate, EncodingType, ParsedPriceUpdate, PriceIdInput, PriceUpdate},
             ApiState,
         },
-        state::aggregate::{
-            Aggregates,
-            RequestTime,
-            UnixTimestamp,
-        },
+        state::aggregate::{Aggregates, RequestTime, UnixTimestamp},
     },
     anyhow::Result,
     axum::{
-        extract::{
-            Path,
-            State,
-        },
+        extract::{Path, State},
         Json,
     },
     pyth_sdk::PriceIdentifier,
@@ -67,8 +51,11 @@ pub struct TimestampPriceUpdatesQueryParams {
     /// If true, include the parsed price update in the `parsed` field of each returned feed. Default is `true`.
     #[serde(default = "default_true")]
     parsed: bool,
-}
 
+    /// If true, invalid price IDs in the `ids` parameter are ignored. Only applicable to the v2 APIs. Default is `false`.
+    #[serde(default)]
+    ignore_invalid_price_ids: bool,
+}
 
 fn default_true() -> bool {
     true
@@ -97,10 +84,14 @@ pub async fn timestamp_price_updates<S>(
 where
     S: Aggregates,
 {
-    let price_ids: Vec<PriceIdentifier> =
+    let price_id_inputs: Vec<PriceIdentifier> =
         query_params.ids.into_iter().map(|id| id.into()).collect();
-
-    verify_price_ids_exist(&state, &price_ids).await?;
+    let price_ids: Vec<PriceIdentifier> = validate_price_ids(
+        &state,
+        &price_id_inputs,
+        query_params.ignore_invalid_price_ids,
+    )
+    .await?;
 
     let state = &*state.state;
     let price_feeds_with_update_data = Aggregates::get_price_feeds_with_update_data(
@@ -123,9 +114,9 @@ where
         .into_iter()
         .map(|data| query_params.encoding.encode_str(&data))
         .collect();
-    let binary_price_update = BinaryPriceUpdate {
+    let binary_price_update = BinaryUpdate {
         encoding: query_params.encoding,
-        data:     encoded_data,
+        data: encoded_data,
     };
     let parsed_price_updates: Option<Vec<ParsedPriceUpdate>> = if query_params.parsed {
         Some(
@@ -143,7 +134,6 @@ where
         binary: binary_price_update,
         parsed: parsed_price_updates,
     };
-
 
     Ok(Json(compressed_price_update))
 }

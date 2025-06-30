@@ -6,12 +6,13 @@
   "private": "true",
   "scripts": {
     "build": "tsc",
-    "deploy": "ts-node ./src/ci/deploy.ts"
+    "deploy": "ts-node ./src/ci/deploy.ts",
+    "test:format": "prettier --check .",
+    "fix:format": "prettier --write ."
   },
   "author": "",
   "license": "Apache-2.0",
   "dependencies": {
-    "@chain-registry/types": "^0.43.6",
     "@cosmjs/cosmwasm-stargate": "^0.32.3",
     "@cosmjs/encoding": "^0.32.3",
     "@cosmjs/proto-signing": "^0.32.3",
@@ -20,11 +21,11 @@
     "@injectivelabs/networks": "^1.14.6",
     "@injectivelabs/sdk-ts": "1.14.7",
     "@ltd/j-toml": "^1.38.0",
+    "@osmonauts/utils": "^1.18.0",
     "@pythnetwork/price-service-client": "workspace:*",
     "@pythnetwork/xc-admin-common": "workspace:*",
     "@terra-money/terra.js": "^3.1.10",
     "adm-zip": "^0.5.10",
-    "chain-registry": "^1.45.1",
     "dotenv": "^16.0.0",
     "ethers": "^5.4.4",
     "long": "^5.2.3",
@@ -40,7 +41,7 @@
     "cosmjs-types": "^0.9.0",
     "eslint": "^8.27.0",
     "eslint-config-prettier": "^8.5.0",
-    "ts-node": "^10.9.1",
-    "typescript": "^4.9.3"
+    "ts-node": "catalog:",
+    "typescript": "catalog:"
   }
 }

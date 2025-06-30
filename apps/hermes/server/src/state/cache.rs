@@ -1,31 +1,14 @@
 use {
     super::State,
     crate::state::aggregate::{
-        wormhole_merkle::WormholeMerkleState,
-        AccumulatorMessages,
-        ProofSet,
-        RawMessage,
-        RequestTime,
-        Slot,
-        UnixTimestamp,
+        wormhole_merkle::WormholeMerkleState, AccumulatorMessages, ProofSet, RawMessage,
+        RequestTime, Slot, UnixTimestamp,
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
+    anyhow::{anyhow, Result},
     futures::future::join_all,
-    pythnet_sdk::messages::{
-        FeedId,
-        Message,
-        MessageType,
-    },
+    pythnet_sdk::messages::{FeedId, Message, MessageType},
     std::{
-        collections::{
-            BTreeMap,
-            HashMap,
-            HashSet,
-        },
-        ops::Bound,
+        collections::{BTreeMap, HashMap, HashSet},
         sync::Arc,
     },
     strum::IntoEnumIterator,
@@ -35,26 +18,26 @@ use {
 #[derive(Clone, PartialEq, Eq, Debug, Hash)]
 pub struct MessageStateKey {
     pub feed_id: FeedId,
-    pub type_:   MessageType,
+    pub type_: MessageType,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, PartialOrd, Ord)]
 pub struct MessageStateTime {
     pub publish_time: UnixTimestamp,
-    pub slot:         Slot,
+    pub slot: Slot,
 }
 
 #[derive(Clone, PartialEq, Debug)]
 pub struct MessageState {
-    pub slot:        Slot,
-    pub message:     Message,
+    pub slot: Slot,
+    pub message: Message,
     /// The raw updated message.
     ///
     /// We need to store the raw message binary because the Message
     /// struct might lose some data due to its support for forward
     /// compatibility.
     pub raw_message: RawMessage,
-    pub proof_set:   ProofSet,
+    pub proof_set: ProofSet,
     pub received_at: UnixTimestamp,
 }
 
@@ -62,14 +45,14 @@ impl MessageState {
     pub fn time(&self) -> MessageStateTime {
         MessageStateTime {
             publish_time: self.message.publish_time(),
-            slot:         self.slot,
+            slot: self.slot,
         }
     }
 
     pub fn key(&self) -> MessageStateKey {
         MessageStateKey {
             feed_id: self.message.feed_id(),
-            type_:   self.message.clone().into(),
+            type_: self.message.clone().into(),
         }
     }
 
@@ -91,8 +74,8 @@ impl MessageState {
 }
 
 #[derive(Clone, Copy)]
-#[allow(dead_code)]
 pub enum MessageStateFilter {
+    #[allow(dead_code, reason = "can be useful later")]
     All,
     Only(MessageType),
 }
@@ -108,19 +91,19 @@ type MessageCache = Arc<RwLock<HashMap<MessageStateKey, BTreeMap<MessageStateTim
 
 /// A collection of caches for various program state.
 pub struct CacheState {
-    accumulator_messages_cache:  AccumulatorMessagesCache,
+    accumulator_messages_cache: AccumulatorMessagesCache,
     wormhole_merkle_state_cache: WormholeMerkleStateCache,
-    message_cache:               MessageCache,
-    cache_size:                  u64,
+    message_cache: MessageCache,
+    cache_size: usize,
 }
 
 impl CacheState {
-    pub fn new(size: u64) -> Self {
+    pub fn new(size: usize) -> Self {
         Self {
-            accumulator_messages_cache:  Arc::new(RwLock::new(BTreeMap::new())),
+            accumulator_messages_cache: Arc::new(RwLock::new(BTreeMap::new())),
             wormhole_merkle_state_cache: Arc::new(RwLock::new(BTreeMap::new())),
-            message_cache:               Arc::new(RwLock::new(HashMap::new())),
-            cache_size:                  size,
+            message_cache: Arc::new(RwLock::new(HashMap::new())),
+            cache_size: size,
         }
     }
 }
@@ -139,12 +122,12 @@ pub trait Cache {
     async fn store_accumulator_messages(
         &self,
         accumulator_messages: AccumulatorMessages,
-    ) -> Result<()>;
+    ) -> Result<bool>;
     async fn fetch_accumulator_messages(&self, slot: Slot) -> Result<Option<AccumulatorMessages>>;
     async fn store_wormhole_merkle_state(
         &self,
         wormhole_merkle_state: WormholeMerkleState,
-    ) -> Result<()>;
+    ) -> Result<bool>;
     async fn fetch_wormhole_merkle_state(&self, slot: Slot) -> Result<Option<WormholeMerkleState>>;
     async fn message_state_keys(&self) -> Vec<MessageStateKey>;
     async fn fetch_message_states(
@@ -181,7 +164,7 @@ where
             cache.insert(time, message_state);
 
             // Remove the earliest message states if the cache size is exceeded
-            while cache.len() > self.into().cache_size as usize {
+            while cache.len() > self.into().cache_size {
                 cache.pop_first();
             }
         }
@@ -229,7 +212,7 @@ where
             message_types.into_iter().map(move |message_type| {
                 let key = MessageStateKey {
                     feed_id: id,
-                    type_:   message_type,
+                    type_: message_type,
                 };
                 retrieve_message_state(self.into(), key, request_time.clone())
             })
@@ -243,13 +226,22 @@ where
     async fn store_accumulator_messages(
         &self,
         accumulator_messages: AccumulatorMessages,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut cache = self.into().accumulator_messages_cache.write().await;
-        cache.insert(accumulator_messages.slot, accumulator_messages);
-        while cache.len() > self.into().cache_size as usize {
+        let slot = accumulator_messages.slot;
+
+        // Check if we already have messages for this slot while holding the lock
+        if cache.contains_key(&slot) {
+            // Messages already exist, return false to indicate no insertion happened
+            return Ok(false);
+        }
+
+        // Messages don't exist, store them
+        cache.insert(slot, accumulator_messages);
+        while cache.len() > self.into().cache_size {
             cache.pop_first();
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn fetch_accumulator_messages(&self, slot: Slot) -> Result<Option<AccumulatorMessages>> {
@@ -260,13 +252,22 @@ where
     async fn store_wormhole_merkle_state(
         &self,
         wormhole_merkle_state: WormholeMerkleState,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut cache = self.into().wormhole_merkle_state_cache.write().await;
-        cache.insert(wormhole_merkle_state.root.slot, wormhole_merkle_state);
-        while cache.len() > self.into().cache_size as usize {
+        let slot = wormhole_merkle_state.root.slot;
+
+        // Check if we already have a state for this slot while holding the lock
+        if cache.contains_key(&slot) {
+            // State already exists, return false to indicate no insertion happened
+            return Ok(false);
+        }
+
+        // State doesn't exist, store it
+        cache.insert(slot, wormhole_merkle_state);
+        while cache.len() > self.into().cache_size {
             cache.pop_first();
         }
-        Ok(())
+        Ok(true)
     }
 
     async fn fetch_wormhole_merkle_state(&self, slot: Slot) -> Result<Option<WormholeMerkleState>> {
@@ -284,6 +285,28 @@ async fn retrieve_message_state(
         Some(key_cache) => {
             match request_time {
                 RequestTime::Latest => key_cache.last_key_value().map(|(_, v)| v).cloned(),
+                RequestTime::LatestTimeEarliestSlot => {
+                    // Get the latest publish time from the last entry
+                    let last_entry = key_cache.last_key_value()?;
+                    let latest_publish_time = last_entry.0.publish_time;
+                    let mut latest_entry_with_earliest_slot = last_entry;
+
+                    // Walk backwards through the sorted entries rather than use `range` since we will only
+                    // have a couple entries that have the same publish_time.
+                    // We have acquired the RwLock via read() above, so we should be safe to reenter the cache here.
+                    for (k, v) in key_cache.iter().rev() {
+                        if k.publish_time < latest_publish_time {
+                            // We've found an entry with an earlier publish time
+                            break;
+                        }
+
+                        // Update our tracked entry (the reverse iteration will find entries
+                        // with higher slots first, so we'll end up with the lowest slot)
+                        latest_entry_with_earliest_slot = (k, v);
+                    }
+
+                    Some(latest_entry_with_earliest_slot.1.clone())
+                }
                 RequestTime::FirstAfter(time) => {
                     // If the requested time is before the first element in the vector, we are
                     // not sure that the first element is the closest one.
@@ -295,13 +318,13 @@ async fn retrieve_message_state(
 
                     let lookup_time = MessageStateTime {
                         publish_time: time,
-                        slot:         0,
+                        slot: 0,
                     };
 
                     // Get the first element that is greater than or equal to the lookup time.
                     key_cache
-                        .lower_bound(Bound::Included(&lookup_time))
-                        .peek_next()
+                        .range(lookup_time..)
+                        .next()
                         .map(|(_, v)| v)
                         .cloned()
                 }
@@ -321,19 +344,15 @@ async fn retrieve_message_state(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "tests")]
 mod test {
     use {
         super::*,
-        crate::state::{
-            aggregate::wormhole_merkle::WormholeMerkleMessageProof,
-            test::setup_state,
-        },
+        crate::state::{aggregate::wormhole_merkle::WormholeMerkleMessageProof, test::setup_state},
         pyth_sdk::UnixTimestamp,
         pythnet_sdk::{
-            accumulators::merkle::MerklePath,
-            hashers::keccak256_160::Keccak160,
-            messages::PriceFeedMessage,
-            wire::v1::WormholeMerkleRoot,
+            accumulators::merkle::MerklePath, hashers::keccak256_160::Keccak160,
+            messages::PriceFeedMessage, wire::v1::WormholeMerkleRoot,
         },
     };
 
@@ -358,7 +377,7 @@ mod test {
             received_at: publish_time,
             proof_set: ProofSet {
                 wormhole_merkle_proof: WormholeMerkleMessageProof {
-                    vaa:   vec![],
+                    vaa: vec![],
                     proof: MerklePath::<Keccak160>::new(vec![]),
                 },
             },
@@ -594,6 +613,72 @@ mod test {
         );
     }
 
+    #[tokio::test]
+    pub async fn test_latest_time_earliest_slot_request_works() {
+        // Initialize state with a cache size of 3 per key.
+        let (state, _) = setup_state(3).await;
+
+        // Create and store a message state with feed id [1....] and publish time 10 at slot 7.
+        create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 10, 7).await;
+
+        // Create and store a message state with feed id [1....] and publish time 10 at slot 10.
+        create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 10, 10).await;
+
+        // Create and store a message state with feed id [1....] and publish time 10 at slot 5.
+        let earliest_slot_message_state =
+            create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 10, 5).await;
+
+        // Create and store a message state with feed id [1....] and publish time 8 at slot 3.
+        create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 8, 3).await;
+
+        // The LatestTimeEarliestSlot should return the message with publish time 10 at slot 5
+        assert_eq!(
+            state
+                .fetch_message_states(
+                    vec![[1; 32]],
+                    RequestTime::LatestTimeEarliestSlot,
+                    MessageStateFilter::Only(MessageType::PriceFeedMessage),
+                )
+                .await
+                .unwrap(),
+            vec![earliest_slot_message_state]
+        );
+
+        // Create and store a message state with feed id [1....] and publish time 15 at slot 20.
+        let newer_time_message_state =
+            create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 15, 20).await;
+
+        // The LatestTimeEarliestSlot should now return the message with publish time 15
+        assert_eq!(
+            state
+                .fetch_message_states(
+                    vec![[1; 32]],
+                    RequestTime::LatestTimeEarliestSlot,
+                    MessageStateFilter::Only(MessageType::PriceFeedMessage),
+                )
+                .await
+                .unwrap(),
+            vec![newer_time_message_state]
+        );
+
+        // Store two messages with even later publish time but different slots
+        create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 20, 35).await;
+        let latest_time_earliest_slot_message =
+            create_and_store_dummy_price_feed_message_state(&*state, [1; 32], 20, 30).await;
+
+        // The LatestTimeEarliestSlot should return the message with publish time 20 at slot 30
+        assert_eq!(
+            state
+                .fetch_message_states(
+                    vec![[1; 32]],
+                    RequestTime::LatestTimeEarliestSlot,
+                    MessageStateFilter::Only(MessageType::PriceFeedMessage),
+                )
+                .await
+                .unwrap(),
+            vec![latest_time_earliest_slot_message]
+        );
+    }
 
     #[tokio::test]
     pub async fn test_store_and_retrieve_first_after_message_state_fails_for_past_time() {
@@ -725,18 +810,7 @@ mod test {
         let (state, _) = setup_state(2).await;
 
         // Make sure the retrieved accumulator messages is what we store.
-        let mut accumulator_messages_at_10 = create_empty_accumulator_messages_at_slot(10);
-        state
-            .store_accumulator_messages(accumulator_messages_at_10.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            state.fetch_accumulator_messages(10).await.unwrap().unwrap(),
-            accumulator_messages_at_10
-        );
-
-        // Make sure overwriting the accumulator messages works.
-        accumulator_messages_at_10.ring_size = 5; // Change the ring size from 3 to 5.
+        let accumulator_messages_at_10 = create_empty_accumulator_messages_at_slot(10);
         state
             .store_accumulator_messages(accumulator_messages_at_10.clone())
             .await
@@ -772,7 +846,7 @@ mod test {
 
     pub fn create_empty_wormhole_merkle_state_at_slot(slot: Slot) -> WormholeMerkleState {
         WormholeMerkleState {
-            vaa:  vec![],
+            vaa: vec![],
             root: WormholeMerkleRoot {
                 slot,
                 root: [0; 20],
@@ -787,22 +861,7 @@ mod test {
         let (state, _) = setup_state(2).await;
 
         // Make sure the retrieved wormhole merkle state is what we store
-        let mut wormhole_merkle_state_at_10 = create_empty_wormhole_merkle_state_at_slot(10);
-        state
-            .store_wormhole_merkle_state(wormhole_merkle_state_at_10.clone())
-            .await
-            .unwrap();
-        assert_eq!(
-            state
-                .fetch_wormhole_merkle_state(10)
-                .await
-                .unwrap()
-                .unwrap(),
-            wormhole_merkle_state_at_10
-        );
-
-        // Make sure overwriting the wormhole merkle state works.
-        wormhole_merkle_state_at_10.root.ring_size = 5; // Change the ring size from 3 to 5.
+        let wormhole_merkle_state_at_10 = create_empty_wormhole_merkle_state_at_slot(10);
         state
             .store_wormhole_merkle_state(wormhole_merkle_state_at_10.clone())
             .await

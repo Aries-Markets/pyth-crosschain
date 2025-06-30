@@ -22,3 +22,7 @@ __pycache__
 .vercel
 .direnv
 .next
+.turbo/
+.cursorrules
+.corepack
+justfile

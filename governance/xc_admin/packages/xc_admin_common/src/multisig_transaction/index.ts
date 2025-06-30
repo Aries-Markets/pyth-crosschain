@@ -23,6 +23,12 @@ import { BPF_UPGRADABLE_LOADER } from "../bpf_upgradable_loader";
 import { AnchorAccounts } from "./anchor";
 import { SolanaStakingMultisigInstruction } from "./SolanaStakingMultisigInstruction";
 import { DEFAULT_RECEIVER_PROGRAM_ID } from "@pythnetwork/pyth-solana-receiver";
+import {
+  PRICE_STORE_PROGRAM_ID,
+  PriceStoreMultisigInstruction,
+} from "../price_store";
+import { LazerMultisigInstruction } from "./LazerMultisigInstruction";
+import { SOLANA_LAZER_PROGRAM_ID } from "@pythnetwork/pyth-lazer-sdk";
 
 export const UNRECOGNIZED_INSTRUCTION = "unrecognizedInstruction";
 export enum MultisigInstructionProgram {
@@ -36,6 +42,8 @@ export enum MultisigInstructionProgram {
   SolanaStakingProgram,
   SolanaReceiver,
   UnrecognizedProgram,
+  PythPriceStore,
+  Lazer,
 }
 
 export function getProgramName(program: MultisigInstructionProgram) {
@@ -58,8 +66,12 @@ export function getProgramName(program: MultisigInstructionProgram) {
       return "Pyth Staking Program";
     case MultisigInstructionProgram.SolanaReceiver:
       return "Pyth Solana Receiver";
+    case MultisigInstructionProgram.PythPriceStore:
+      return "Pyth Price Store";
     case MultisigInstructionProgram.UnrecognizedProgram:
       return "Unknown";
+    case MultisigInstructionProgram.Lazer:
+      return "Lazer";
   }
 }
 
@@ -79,7 +91,7 @@ export class UnrecognizedProgram implements MultisigInstruction {
   constructor(
     name: string,
     args: { [key: string]: any },
-    accounts: AnchorAccounts
+    accounts: AnchorAccounts,
   ) {
     this.name = name;
     this.args = args;
@@ -87,30 +99,34 @@ export class UnrecognizedProgram implements MultisigInstruction {
   }
 
   static fromTransactionInstruction(
-    instruction: TransactionInstruction
+    instruction: TransactionInstruction,
   ): UnrecognizedProgram {
     return new UnrecognizedProgram(
       UNRECOGNIZED_INSTRUCTION,
       { data: instruction.data },
-      { named: {}, remaining: instruction.keys }
+      { named: {}, remaining: instruction.keys },
     );
   }
 }
 export class MultisigParser {
   readonly pythOracleAddress: PublicKey;
   readonly wormholeBridgeAddress: PublicKey | undefined;
+  readonly pythPriceStoreAddress: PublicKey | undefined;
 
   constructor(
     pythOracleAddress: PublicKey,
-    wormholeBridgeAddress: PublicKey | undefined
+    wormholeBridgeAddress: PublicKey | undefined,
+    pythPriceStoreAddress: PublicKey | undefined,
   ) {
     this.pythOracleAddress = pythOracleAddress;
     this.wormholeBridgeAddress = wormholeBridgeAddress;
+    this.pythPriceStoreAddress = pythPriceStoreAddress;
   }
   static fromCluster(cluster: PythCluster): MultisigParser {
     return new MultisigParser(
       getPythProgramKeyForCluster(cluster),
-      WORMHOLE_ADDRESS[cluster]
+      WORMHOLE_ADDRESS[cluster],
+      PRICE_STORE_PROGRAM_ID,
     );
   }
 
@@ -120,10 +136,17 @@ export class MultisigParser {
       instruction.programId.equals(this.wormholeBridgeAddress)
     ) {
       return WormholeMultisigInstruction.fromTransactionInstruction(
-        instruction
+        instruction,
       );
     } else if (instruction.programId.equals(this.pythOracleAddress)) {
       return PythMultisigInstruction.fromTransactionInstruction(instruction);
+    } else if (
+      this.pythPriceStoreAddress &&
+      instruction.programId.equals(this.pythPriceStoreAddress)
+    ) {
+      return PriceStoreMultisigInstruction.fromTransactionInstruction(
+        instruction,
+      );
     } else if (
       instruction.programId.equals(MESSAGE_BUFFER_PROGRAM_ID) ||
       instruction.programId.equals(MESH_PROGRAM_ID) ||
@@ -133,25 +156,33 @@ export class MultisigParser {
       return AnchorMultisigInstruction.fromTransactionInstruction(instruction);
     } else if (instruction.programId.equals(SystemProgram.programId)) {
       return SystemProgramMultisigInstruction.fromTransactionInstruction(
-        instruction
+        instruction,
       );
     } else if (instruction.programId.equals(BPF_UPGRADABLE_LOADER)) {
       return BpfUpgradableLoaderInstruction.fromTransactionInstruction(
-        instruction
+        instruction,
       );
     } else if (instruction.programId.equals(StakeProgram.programId)) {
       return SolanaStakingMultisigInstruction.fromTransactionInstruction(
-        instruction
+        instruction,
       );
+    } else if (
+      instruction.programId.equals(new PublicKey(SOLANA_LAZER_PROGRAM_ID))
+    ) {
+      return LazerMultisigInstruction.fromInstruction(instruction);
     } else {
       return UnrecognizedProgram.fromTransactionInstruction(instruction);
     }
   }
 }
 
+export { idlSetBuffer } from "./anchor";
 export { WormholeMultisigInstruction } from "./WormholeMultisigInstruction";
 export { PythMultisigInstruction } from "./PythMultisigInstruction";
 export { AnchorMultisigInstruction } from "./MessageBufferMultisigInstruction";
 export { SystemProgramMultisigInstruction } from "./SystemProgramInstruction";
 export { BpfUpgradableLoaderInstruction } from "./BpfUpgradableLoaderMultisigInstruction";
-export { SolanaStakingMultisigInstruction } from "./SolanaStakingMultisigInstruction";
+export {
+  SolanaStakingMultisigInstruction,
+  fetchStakeAccounts,
+} from "./SolanaStakingMultisigInstruction";

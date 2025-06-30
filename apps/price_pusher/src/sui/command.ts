@@ -1,4 +1,4 @@
-import { PriceServiceConnection } from "@pythnetwork/price-service-client";
+import { HermesClient } from "@pythnetwork/hermes-client";
 import * as options from "../options";
 import { readPriceConfigFile } from "../price-config";
 import fs from "fs";
@@ -8,13 +8,17 @@ import { Options } from "yargs";
 import { SuiPriceListener, SuiPricePusher } from "./sui";
 import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
 import pino from "pino";
+import { filterInvalidPriceItems } from "../utils";
+import { PricePusherMetrics } from "../metrics";
+import { createSuiBalanceTracker } from "./balance-tracker";
+import { SuiClient } from "@mysten/sui/client";
 
 export default {
   command: "sui",
   describe:
     "Run price pusher for sui. Most of the arguments below are" +
     "network specific, so there's one set of values for mainnet and" +
-    "another for testnet. See config.sui..sample.json for the " +
+    " another for testnet. See config.sui.mainnet.sample.json for the " +
     "appropriate values for your network. ",
   builder: {
     endpoint: {
@@ -70,8 +74,9 @@ export default {
     ...options.pollingFrequency,
     ...options.pushingFrequency,
     ...options.logLevel,
-    ...options.priceServiceConnectionLogLevel,
     ...options.controllerLogLevel,
+    ...options.enableMetrics,
+    ...options.metricsPort,
   },
   handler: async function (argv: any) {
     const {
@@ -88,43 +93,55 @@ export default {
       gasBudget,
       accountIndex,
       logLevel,
-      priceServiceConnectionLogLevel,
       controllerLogLevel,
+      enableMetrics,
+      metricsPort,
     } = argv;
 
     const logger = pino({ level: logLevel });
 
     const priceConfigs = readPriceConfigFile(priceConfigFile);
-    const priceServiceConnection = new PriceServiceConnection(
-      priceServiceEndpoint,
-      {
-        logger: logger.child(
-          { module: "PriceServiceConnection" },
-          { level: priceServiceConnectionLogLevel }
-        ),
-        priceFeedRequestConfig: {
-          binary: true,
-        },
-      }
-    );
+    const hermesClient = new HermesClient(priceServiceEndpoint);
+
     const mnemonic = fs.readFileSync(mnemonicFile, "utf-8").trim();
     const keypair = Ed25519Keypair.deriveKeypair(
       mnemonic,
-      `m/44'/784'/${accountIndex}'/0'/0'`
+      `m/44'/784'/${accountIndex}'/0'/0'`,
     );
-    logger.info(
-      `Pushing updates from wallet address: ${keypair
-        .getPublicKey()
-        .toSuiAddress()}`
-    );
+    const suiAddress = keypair.getPublicKey().toSuiAddress();
+    logger.info(`Pushing updates from wallet address: ${suiAddress}`);
 
-    const priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+    let priceItems = priceConfigs.map(({ id, alias }) => ({ id, alias }));
+
+    // Better to filter out invalid price items before creating the pyth listener
+    const { existingPriceItems, invalidPriceItems } =
+      await filterInvalidPriceItems(hermesClient, priceItems);
+
+    if (invalidPriceItems.length > 0) {
+      logger.error(
+        `Invalid price id submitted for: ${invalidPriceItems
+          .map(({ alias }) => alias)
+          .join(", ")}`,
+      );
+    }
+
+    priceItems = existingPriceItems;
+
+    // Initialize metrics if enabled
+    let metrics: PricePusherMetrics | undefined;
+    if (enableMetrics) {
+      metrics = new PricePusherMetrics(logger.child({ module: "Metrics" }));
+      metrics.start(metricsPort);
+      logger.info(`Metrics server started on port ${metricsPort}`);
+    }
 
     const pythListener = new PythPriceListener(
-      priceServiceConnection,
+      hermesClient,
       priceItems,
-      logger.child({ module: "PythPriceListener" })
+      logger.child({ module: "PythPriceListener" }),
     );
+
+    const suiClient = new SuiClient({ url: endpoint });
 
     const suiListener = new SuiPriceListener(
       pythStateId,
@@ -132,10 +149,11 @@ export default {
       endpoint,
       priceItems,
       logger.child({ module: "SuiPriceListener" }),
-      { pollingFrequency }
+      { pollingFrequency },
     );
+
     const suiPusher = await SuiPricePusher.createWithAutomaticGasPool(
-      priceServiceConnection,
+      hermesClient,
       logger.child({ module: "SuiPricePusher" }),
       pythStateId,
       wormholeStateId,
@@ -143,7 +161,7 @@ export default {
       keypair,
       gasBudget,
       numGasObjects,
-      ignoreGasObjects
+      ignoreGasObjects,
     );
 
     const controller = new Controller(
@@ -152,8 +170,26 @@ export default {
       suiListener,
       suiPusher,
       logger.child({ module: "Controller" }, { level: controllerLogLevel }),
-      { pushingFrequency }
+      {
+        pushingFrequency,
+        metrics,
+      },
     );
+
+    // Create and start the balance tracker if metrics are enabled
+    if (metrics) {
+      const balanceTracker = createSuiBalanceTracker({
+        client: suiClient,
+        address: suiAddress,
+        network: "sui",
+        updateInterval: pushingFrequency,
+        metrics,
+        logger,
+      });
+
+      // Start the balance tracker
+      await balanceTracker.start();
+    }
 
     controller.start();
   },

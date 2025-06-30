@@ -2,16 +2,16 @@ import { Program } from '@coral-xyz/anchor'
 import { Dialog, Menu, Transition } from '@headlessui/react'
 import { PythOracle } from '@pythnetwork/client/lib/anchor'
 import * as Label from '@radix-ui/react-label'
-import { useWallet } from '@solana/wallet-adapter-react'
-import { WalletModalButton } from '@solana/wallet-adapter-react-ui'
 import { PublicKey, TransactionInstruction } from '@solana/web3.js'
 import SquadsMesh from '@sqds/mesh'
 import axios from 'axios'
 import { Fragment, useContext, useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import {
+  createDetermisticPriceStoreInitializePublisherInstruction,
   getMaximumNumberOfPublishers,
   getMultisigCluster,
+  isPriceStorePublisherInitialized,
   isRemoteCluster,
   mapKey,
   PRICE_FEED_MULTISIG,
@@ -37,12 +37,12 @@ const assetTypes = [
 const PermissionDepermissionKey = ({
   isPermission,
   pythProgramClient,
-  squads,
+  readOnlySquads,
   proposerServerUrl,
 }: {
   isPermission: boolean
   pythProgramClient?: Program<PythOracle>
-  squads?: SquadsMesh
+  readOnlySquads: SquadsMesh
   proposerServerUrl: string
 }) => {
   const [publisherKey, setPublisherKey] = useState(
@@ -53,11 +53,11 @@ const PermissionDepermissionKey = ({
   const [isSubmitButtonLoading, setIsSubmitButtonLoading] = useState(false)
   const [priceAccounts, setPriceAccounts] = useState<PublicKey[]>([])
   const { cluster } = useContext(ClusterContext)
-  const { rawConfig, dataIsLoading } = usePythContext()
-  const { connected } = useWallet()
+  const { rawConfig, dataIsLoading, connection } = usePythContext()
 
   // get current input value
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleChange = (event: any) => {
     setSelectedAssetType(event.target.value)
     setIsModalOpen(true)
@@ -75,9 +75,9 @@ const PermissionDepermissionKey = ({
   }
 
   const handleSubmitButton = async () => {
-    if (pythProgramClient && squads) {
+    if (pythProgramClient) {
       const instructions: TransactionInstruction[] = []
-      const multisigAuthority = squads.getAuthorityPDA(
+      const multisigAuthority = readOnlySquads.getAuthorityPDA(
         PRICE_FEED_MULTISIG[getMultisigCluster(cluster)],
         1
       )
@@ -86,11 +86,12 @@ const PermissionDepermissionKey = ({
         ? mapKey(multisigAuthority)
         : multisigAuthority
 
+      const publisherPublicKey = new PublicKey(publisherKey)
       for (const priceAccount of priceAccounts) {
         if (isPermission) {
           instructions.push(
             await pythProgramClient.methods
-              .addPublisher(new PublicKey(publisherKey))
+              .addPublisher(publisherPublicKey)
               .accounts({
                 fundingAccount,
                 priceAccount: priceAccount,
@@ -100,12 +101,28 @@ const PermissionDepermissionKey = ({
         } else {
           instructions.push(
             await pythProgramClient.methods
-              .delPublisher(new PublicKey(publisherKey))
+              .delPublisher(publisherPublicKey)
               .accounts({
                 fundingAccount,
                 priceAccount: priceAccount,
               })
               .instruction()
+          )
+        }
+      }
+      if (isPermission) {
+        if (
+          !connection ||
+          !(await isPriceStorePublisherInitialized(
+            connection,
+            publisherPublicKey
+          ))
+        ) {
+          instructions.push(
+            await createDetermisticPriceStoreInitializePublisherInstruction(
+              fundingAccount,
+              publisherPublicKey
+            )
           )
         }
       }
@@ -119,6 +136,7 @@ const PermissionDepermissionKey = ({
         toast.success(`Proposal sent! 🚀 Proposal Pubkey: ${proposalPubkey}`)
         setIsSubmitButtonLoading(false)
         closeModal()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (error: any) {
         if (error.response) {
           toast.error(capitalizeFirstLetter(error.response.data))
@@ -152,7 +170,14 @@ const PermissionDepermissionKey = ({
       })
       setPriceAccounts(res)
     }
-  }, [rawConfig, dataIsLoading, selectedAssetType, isPermission, publisherKey])
+  }, [
+    rawConfig,
+    dataIsLoading,
+    selectedAssetType,
+    isPermission,
+    publisherKey,
+    cluster,
+  ])
 
   return (
     <>
@@ -246,22 +271,16 @@ const PermissionDepermissionKey = ({
                       />
                     </div>
                     <div className="mt-6">
-                      {!connected ? (
-                        <div className="flex justify-center">
-                          <WalletModalButton className="action-btn text-base" />
-                        </div>
-                      ) : (
-                        <button
-                          className="action-btn text-base"
-                          onClick={handleSubmitButton}
-                        >
-                          {isSubmitButtonLoading ? (
-                            <Spinner />
-                          ) : (
-                            'Submit Proposal'
-                          )}
-                        </button>
-                      )}
+                      <button
+                        className="action-btn text-base"
+                        onClick={handleSubmitButton}
+                      >
+                        {isSubmitButtonLoading ? (
+                          <Spinner />
+                        ) : (
+                          'Submit Proposal'
+                        )}
+                      </button>
                     </div>
                   </div>
                 </Dialog.Panel>

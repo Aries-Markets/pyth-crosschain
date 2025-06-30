@@ -8,10 +8,7 @@ import {
   ChainPriceListener,
   PriceItem,
 } from "../interface";
-import {
-  PriceServiceConnection,
-  HexString,
-} from "@pythnetwork/price-service-client";
+import { HermesClient, HexString } from "@pythnetwork/hermes-client";
 import { DurationInSeconds } from "../utils";
 
 import { Account, Connection, KeyPair } from "near-api-js";
@@ -30,7 +27,7 @@ export class NearPriceListener extends ChainPriceListener {
     private logger: Logger,
     config: {
       pollingFrequency: DurationInSeconds;
-    }
+    },
   ) {
     super(config.pollingFrequency, priceItems);
   }
@@ -41,8 +38,8 @@ export class NearPriceListener extends ChainPriceListener {
 
       this.logger.debug(
         `Polled a NEAR on chain price for feed ${this.priceIdToAlias.get(
-          priceId
-        )} (${priceId}) ${JSON.stringify(priceRaw)}.`
+          priceId,
+        )} (${priceId}) ${JSON.stringify(priceRaw)}.`,
       );
 
       if (priceRaw) {
@@ -64,13 +61,13 @@ export class NearPriceListener extends ChainPriceListener {
 export class NearPricePusher implements IPricePusher {
   constructor(
     private account: NearAccount,
-    private connection: PriceServiceConnection,
-    private logger: Logger
+    private hermesClient: HermesClient,
+    private logger: Logger,
   ) {}
 
   async updatePriceFeed(
     priceIds: string[],
-    pubTimesToPush: number[]
+    pubTimesToPush: number[],
   ): Promise<void> {
     if (priceIds.length === 0) {
       return;
@@ -105,7 +102,7 @@ export class NearPricePusher implements IPricePusher {
             if (
               Object.prototype.hasOwnProperty.call(
                 receipt["outcome"]["status"],
-                "Failure"
+                "Failure",
               )
             ) {
               failureMessages.push(receipt["outcome"]["status"]);
@@ -113,12 +110,12 @@ export class NearPricePusher implements IPricePusher {
             }
             return is_success;
           },
-          true
+          true,
         );
         if (is_success) {
           this.logger.info(
             { hash: outcome["transaction"]["hash"] },
-            "updatePriceFeeds successful."
+            "updatePriceFeeds successful.",
           );
         } else {
           this.logger.error({ failureMessages }, "updatePriceFeeds failed");
@@ -130,10 +127,13 @@ export class NearPricePusher implements IPricePusher {
   }
 
   private async getPriceFeedsUpdateData(
-    priceIds: HexString[]
+    priceIds: HexString[],
   ): Promise<string[]> {
-    const latestVaas = await this.connection.getLatestVaas(priceIds);
-    return latestVaas.map((vaa) => Buffer.from(vaa, "base64").toString("hex"));
+    const response = await this.hermesClient.getLatestPriceUpdates(priceIds, {
+      encoding: "base64",
+      ignoreInvalidPriceIds: true,
+    });
+    return response.binary.data;
   }
 }
 
@@ -145,13 +145,13 @@ export class NearAccount {
     accountId: string,
     nodeUrl: string,
     privateKeyPath: string | undefined,
-    private pythAccountId: string
+    private pythAccountId: string,
   ) {
     const connection = this.getConnection(
       network,
       accountId,
       nodeUrl,
-      privateKeyPath
+      privateKeyPath,
     );
     this.account = new Account(connection, accountId);
   }
@@ -178,7 +178,7 @@ export class NearAccount {
 
   async updatePriceFeeds(
     data: string,
-    updateFee: any
+    updateFee: any,
   ): Promise<FinalExecutionOutcome> {
     return await this.account.functionCall({
       contractId: this.pythAccountId,
@@ -195,7 +195,7 @@ export class NearAccount {
     network: string,
     accountId: string,
     nodeUrl: string,
-    privateKeyPath: string | undefined
+    privateKeyPath: string | undefined,
   ): Connection {
     const content = fs.readFileSync(
       privateKeyPath ||
@@ -203,8 +203,8 @@ export class NearAccount {
           os.homedir(),
           ".near-credentials",
           network,
-          accountId + ".json"
-        )
+          accountId + ".json",
+        ),
     );
     const accountInfo = JSON.parse(content.toString());
     let privateKey = accountInfo.private_key;

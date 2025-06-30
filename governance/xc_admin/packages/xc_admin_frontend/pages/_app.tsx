@@ -6,12 +6,9 @@ import {
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui'
 import '@solana/wallet-adapter-react-ui/styles.css'
 import {
-  GlowWalletAdapter,
   LedgerWalletAdapter,
   PhantomWalletAdapter,
   SolflareWalletAdapter,
-  SolletExtensionWalletAdapter,
-  SolletWalletAdapter,
   TorusWalletAdapter,
   WalletConnectWalletAdapter,
   WalletConnectWalletAdapterConfig,
@@ -23,8 +20,10 @@ import Head from 'next/head'
 import { useMemo } from 'react'
 import { Toaster } from 'react-hot-toast'
 import { ClusterProvider } from '../contexts/ClusterContext'
+import { ProgramProvider } from '../contexts/ProgramContext'
 import SEO from '../next-seo.config'
 import '../styles/globals.css'
+import { NuqsAdapter } from 'nuqs/adapters/next/pages'
 
 const walletConnectConfig: WalletConnectWalletAdapterConfig = {
   network: WalletAdapterNetwork.Mainnet,
@@ -54,47 +53,46 @@ function MyApp({ Component, pageProps }: AppProps) {
   const wallets = useMemo(
     () => [
       new PhantomWalletAdapter(),
-      new GlowWalletAdapter(),
       new SolflareWalletAdapter(),
       new TorusWalletAdapter(),
       new LedgerWalletAdapter(),
-      new SolletWalletAdapter(),
-      new SolletExtensionWalletAdapter(),
       new WalletConnectWalletAdapter(walletConnectConfig),
     ],
     []
   )
 
   return (
-    <>
+    <NuqsAdapter>
       <ConnectionProvider
         endpoint={endpoint || clusterApiUrl(WalletAdapterNetwork.Devnet)}
       >
         <WalletProvider wallets={wallets} autoConnect>
           <WalletModalProvider>
             <ClusterProvider>
-              <Head>
-                <meta
-                  name="viewport"
-                  content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+              <ProgramProvider>
+                <Head>
+                  <meta
+                    name="viewport"
+                    content="width=device-width, initial-scale=1.0, maximum-scale=1.0"
+                  />
+                </Head>
+                <DefaultSeo {...SEO} />
+                <Component {...pageProps} />
+                <Toaster
+                  position="bottom-left"
+                  toastOptions={{
+                    style: {
+                      wordBreak: 'break-word',
+                    },
+                  }}
+                  reverseOrder={false}
                 />
-              </Head>
-              <DefaultSeo {...SEO} />
-              <Component {...pageProps} />
-              <Toaster
-                position="bottom-left"
-                toastOptions={{
-                  style: {
-                    wordBreak: 'break-word',
-                  },
-                }}
-                reverseOrder={false}
-              />
+              </ProgramProvider>
             </ClusterProvider>
           </WalletModalProvider>
         </WalletProvider>
       </ConnectionProvider>
-    </>
+    </NuqsAdapter>
   )
 }
 

@@ -1,11 +1,9 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import {
-  DefaultStore,
-  getDefaultDeploymentConfig,
-  SuiChain,
-  SuiPriceFeedContract,
-} from "@pythnetwork/contract-manager";
+import { SuiChain } from "@pythnetwork/contract-manager/core/chains";
+import { SuiPriceFeedContract } from "@pythnetwork/contract-manager/core/contracts/sui";
+import { DefaultStore } from "@pythnetwork/contract-manager/node/store";
+import { getDefaultDeploymentConfig } from "@pythnetwork/contract-manager/core/base";
 import { PriceServiceConnection } from "@pythnetwork/price-service-client";
 import { execSync } from "child_process";
 import { initPyth, publishPackage } from "./pyth_deploy";
@@ -35,7 +33,8 @@ const OPTIONS = {
   },
   endpoint: {
     type: "string",
-    desc: "Price service endpoint to use, defaults to https://hermes.pyth.network for mainnet and https://hermes-beta.pyth.network for testnet",
+    default: "https://hermes.pyth.network",
+    desc: "Price service endpoint to use, defaults to https://hermes.pyth.network",
   },
   "feed-id": {
     type: "array",
@@ -52,16 +51,6 @@ function getContract(contractId: string): SuiPriceFeedContract {
   return contract;
 }
 
-function getPriceService(
-  contract: SuiPriceFeedContract,
-  endpointOverride: string | undefined
-): PriceServiceConnection {
-  const defaultEndpoint = contract.getChain().isMainnet()
-    ? "https://hermes.pyth.network"
-    : "https://hermes-beta.pyth.network";
-  return new PriceServiceConnection(endpointOverride || defaultEndpoint);
-}
-
 yargs(hideBin(process.argv))
   .command(
     "create",
@@ -75,20 +64,20 @@ yargs(hideBin(process.argv))
           endpoint: OPTIONS.endpoint,
         })
         .usage(
-          "$0 create --contract <contract-id> --feed-id <feed-id> --private-key <private-key>"
+          "$0 create --contract <contract-id> --feed-id <feed-id> --private-key <private-key>",
         );
     },
     async (argv) => {
       const contract = getContract(argv.contract);
-      const priceService = getPriceService(contract, argv.endpoint);
+      const priceService = new PriceServiceConnection(argv.endpoint);
       const feedIds = argv["feed-id"] as string[];
       const vaas = await priceService.getLatestVaas(feedIds);
       const digest = await contract.executeCreatePriceFeed(
         argv["private-key"],
-        vaas.map((vaa) => Buffer.from(vaa, "base64"))
+        vaas.map((vaa) => Buffer.from(vaa, "base64")),
       );
       console.log("Transaction successful. Digest:", digest);
-    }
+    },
   )
   .command(
     "create-all",
@@ -101,12 +90,12 @@ yargs(hideBin(process.argv))
           endpoint: OPTIONS.endpoint,
         })
         .usage(
-          "$0 create-all --contract <contract-id> --private-key <private-key>"
+          "$0 create-all --contract <contract-id> --private-key <private-key>",
         );
     },
     async (argv) => {
       const contract = getContract(argv.contract);
-      const priceService = getPriceService(contract, argv.endpoint);
+      const priceService = new PriceServiceConnection(argv.endpoint);
       const feedIds = await priceService.getPriceFeedIds();
       const BATCH_SIZE = 10;
       for (let i = 0; i < feedIds.length; i += BATCH_SIZE) {
@@ -114,12 +103,12 @@ yargs(hideBin(process.argv))
         const vaas = await priceService.getLatestVaas(batch);
         const digest = await contract.executeCreatePriceFeed(
           argv["private-key"],
-          vaas.map((vaa) => Buffer.from(vaa, "base64"))
+          vaas.map((vaa) => Buffer.from(vaa, "base64")),
         );
         console.log("Transaction successful. Digest:", digest);
         console.log(`Progress: ${i + BATCH_SIZE}/${feedIds.length}`);
       }
-    }
+    },
   )
   .command(
     "generate-digest",
@@ -141,12 +130,12 @@ yargs(hideBin(process.argv))
           `sui move build --dump-bytecode-as-base64 --path ${__dirname}/${argv.path} 2> /dev/null`,
           {
             encoding: "utf-8",
-          }
-        )
+          },
+        ),
       );
       console.log("Contract digest:");
       console.log(Buffer.from(buildOutput.digest).toString("hex"));
-    }
+    },
   )
   .command(
     "deploy",
@@ -163,19 +152,19 @@ yargs(hideBin(process.argv))
           path: OPTIONS.path,
         })
         .usage(
-          "$0 deploy --private-key <private-key> --chain [sui_mainnet|sui_testnet] --path <path-to-contracts>"
+          "$0 deploy --private-key <private-key> --chain [sui_mainnet|sui_testnet] --path <path-to-contracts>",
         );
     },
     async (argv) => {
       const walletPrivateKey = argv["private-key"];
       const chain = DefaultStore.chains[argv.chain] as SuiChain;
       const keypair = Ed25519Keypair.fromSecretKey(
-        Buffer.from(walletPrivateKey, "hex")
+        new Uint8Array(Buffer.from(walletPrivateKey, "hex")),
       );
       const result = await publishPackage(
         keypair,
         chain.getProvider(),
-        argv.path
+        argv.path,
       );
       const deploymentType = chain.isMainnet() ? "stable" : "beta";
       const config = getDefaultDeploymentConfig(deploymentType);
@@ -185,9 +174,9 @@ yargs(hideBin(process.argv))
         result.packageId,
         result.deployerCapId,
         result.upgradeCapId,
-        config
+        config,
       );
-    }
+    },
   )
   .command(
     "update-feeds",
@@ -201,21 +190,21 @@ yargs(hideBin(process.argv))
           endpoint: OPTIONS.endpoint,
         })
         .usage(
-          "$0 update-feeds --contract <contract-id> --feed-id <feed-id> --private-key <private-key>"
+          "$0 update-feeds --contract <contract-id> --feed-id <feed-id> --private-key <private-key>",
         );
     },
     async (argv) => {
       const contract = getContract(argv.contract);
-      const priceService = getPriceService(contract, argv.endpoint);
+      const priceService = new PriceServiceConnection(argv.endpoint);
       const feedIds = argv["feed-id"] as string[];
       const vaas = await priceService.getLatestVaas(feedIds);
       const digest = await contract.executeUpdatePriceFeedWithFeeds(
         argv["private-key"],
         vaas.map((vaa) => Buffer.from(vaa, "base64")),
-        feedIds
+        feedIds,
       );
       console.log("Transaction successful. Digest:", digest);
-    }
+    },
   )
   .command(
     "upgrade",
@@ -233,13 +222,13 @@ yargs(hideBin(process.argv))
           path: OPTIONS.path,
         })
         .usage(
-          "$0 upgrade --private-key <private-key> --contract <contract-id> --vaa <upgrade-vaa>"
+          "$0 upgrade --private-key <private-key> --contract <contract-id> --vaa <upgrade-vaa>",
         );
     },
     async (argv) => {
       const contract = getContract(argv.contract);
       const keypair = Ed25519Keypair.fromSecretKey(
-        Buffer.from(argv["private-key"], "hex")
+        new Uint8Array(Buffer.from(argv["private-key"], "hex")),
       );
 
       const pythContractsPath = resolve(`${__dirname}/${argv.path}`);
@@ -258,7 +247,7 @@ yargs(hideBin(process.argv))
         modules,
         dependencies,
         signedVaa,
-        contract
+        contract,
       );
       console.log("Tx digest", upgradeResults.digest);
       if (
@@ -269,7 +258,7 @@ yargs(hideBin(process.argv))
       }
 
       console.log(
-        "Upgrade successful, Executing the migrate function in a separate transaction..."
+        "Upgrade successful, Executing the migrate function in a separate transaction...",
       );
 
       // We can not do the migration in the same transaction since the newly published package is not found
@@ -280,7 +269,7 @@ yargs(hideBin(process.argv))
         contract.chain.getProvider(),
         signedVaa,
         contract,
-        pythPackageOld
+        pythPackageOld,
       );
       console.log("Tx digest", migrateResults.digest);
       if (
@@ -288,10 +277,10 @@ yargs(hideBin(process.argv))
         migrateResults.effects.status.status !== "success"
       ) {
         throw new Error(
-          `Migrate failed. Old package id is ${pythPackageOld}. Please do the migration manually`
+          `Migrate failed. Old package id is ${pythPackageOld}. Please do the migration manually`,
         );
       }
       console.log("Migrate successful");
-    }
+    },
   )
   .demandCommand().argv;

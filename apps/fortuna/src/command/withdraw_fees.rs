@@ -1,21 +1,11 @@
 use {
     crate::{
         chain::ethereum::SignablePythContract,
-        config::{
-            Config,
-            WithdrawFeesOptions,
-        },
+        config::{Config, WithdrawFeesOptions},
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
-    ethers::{
-        signers::Signer,
-        types::Address,
-    },
+    anyhow::{anyhow, Result},
+    ethers::{signers::Signer, types::Address},
 };
-
 
 pub async fn withdraw_fees(opts: &WithdrawFeesOptions) -> Result<()> {
     let config = Config::load(&opts.config.config)?;
@@ -32,11 +22,11 @@ pub async fn withdraw_fees(opts: &WithdrawFeesOptions) -> Result<()> {
         Some(chain_id) => {
             let chain_config = &config.get_chain_config(&chain_id)?;
             let contract =
-                SignablePythContract::from_config(&chain_config, &private_key_string).await?;
+                SignablePythContract::from_config(chain_config, &private_key_string).await?;
 
             withdraw_fees_for_chain(
                 contract,
-                config.provider.address.clone(),
+                config.provider.address,
                 opts.keeper,
                 opts.retain_balance_wei,
             )
@@ -46,11 +36,11 @@ pub async fn withdraw_fees(opts: &WithdrawFeesOptions) -> Result<()> {
             for (chain_id, chain_config) in config.chains.iter() {
                 tracing::info!("Withdrawing fees for chain: {}", chain_id);
                 let contract =
-                    SignablePythContract::from_config(&chain_config, &private_key_string).await?;
+                    SignablePythContract::from_config(chain_config, &private_key_string).await?;
 
                 withdraw_fees_for_chain(
                     contract,
-                    config.provider.address.clone(),
+                    config.provider.address,
                     opts.keeper,
                     opts.retain_balance_wei,
                 )

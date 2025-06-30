@@ -1,7 +1,8 @@
 {
   "name": "@pythnetwork/entropy-sdk-solidity",
-  "version": "1.5.0",
+  "version": "2.0.0",
   "description": "Generate secure random numbers with Pyth Entropy",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/pyth-network/pyth-crosschain",
@@ -11,9 +12,10 @@
     "access": "public"
   },
   "scripts": {
-    "format": "prettier --write .",
-    "generate-abi": "generate-abis IEntropy IEntropyConsumer EntropyErrors EntropyEvents EntropyStructs PRNG",
-    "check-abi": "git diff --exit-code abis"
+    "test:format": "prettier --check .",
+    "fix:format": "prettier --write .",
+    "build": "generate-abis IEntropy IEntropyV2 IEntropyConsumer EntropyErrors EntropyEvents EntropyEventsV2 EntropyStructs EntropyStructsV2 EntropyStatusConstants PRNG",
+    "test": "git diff --exit-code abis"
   },
   "keywords": [
     "pyth",
@@ -27,8 +29,8 @@
   },
   "homepage": "https://github.com/pyth-network/pyth-crosschain/tree/main/target_chains/ethereum/entropy_sdk/solidity",
   "devDependencies": {
-    "prettier": "^2.7.1",
-    "prettier-plugin-solidity": "^1.0.0-rc.1",
-    "abi_generator": "workspace:*"
+    "abi_generator": "workspace:*",
+    "prettier": "catalog:",
+    "prettier-plugin-solidity": "catalog:"
   }
 }

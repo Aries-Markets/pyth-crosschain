@@ -1,15 +1,19 @@
-import NodeWallet from '@coral-xyz/anchor/dist/cjs/nodewallet'
 import { useWallet } from '@solana/wallet-adapter-react'
 import {
   AccountMeta,
-  Keypair,
   PublicKey,
   SystemProgram,
   TransactionInstruction,
 } from '@solana/web3.js'
 import SquadsMesh from '@sqds/mesh'
 import { MultisigAccount, TransactionAccount } from '@sqds/mesh/lib/types'
-import { Fragment, useContext, useEffect, useState } from 'react'
+import {
+  type ReactNode,
+  Fragment,
+  useContext,
+  useEffect,
+  useState,
+} from 'react'
 import toast from 'react-hot-toast'
 import {
   AnchorMultisigInstruction,
@@ -53,7 +57,7 @@ const IconWithTooltip = ({
   icon,
   tooltipText,
 }: {
-  icon: JSX.Element
+  icon: ReactNode
   tooltipText: string
 }) => {
   return (
@@ -175,10 +179,10 @@ export const Proposal = ({
       : contextCluster
 
   const {
-    squads,
+    walletSquads: squads,
     isLoading: isMultisigLoading,
-    connection,
     refreshData,
+    readOnlySquads,
   } = useMultisigContext()
   const {
     priceAccountKeyToSymbolMapping,
@@ -234,11 +238,7 @@ export const Proposal = ({
   useEffect(() => {
     let isCancelled = false
     const fetchInstructions = async () => {
-      if (proposal && connection) {
-        const readOnlySquads = new SquadsMesh({
-          connection,
-          wallet: new NodeWallet(new Keypair()),
-        })
+      if (proposal) {
         const proposalInstructions = (
           await getManyProposalsInstructions(readOnlySquads, [proposal])
         )[0]
@@ -261,7 +261,7 @@ export const Proposal = ({
     return () => {
       isCancelled = true
     }
-  }, [cluster, proposal, squads, connection])
+  }, [cluster, proposal, readOnlySquads])
 
   const handleClick = async (
     instructionGenerator: (
@@ -300,6 +300,7 @@ export const Proposal = ({
 
         if (refreshData) await refreshData().fetchData()
         toast.success(msg)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
       } catch (e: any) {
         toast.error(capitalizeFirstLetter(e.message))
       } finally {
@@ -377,8 +378,8 @@ export const Proposal = ({
           {uniqueTargetCluster
             ? `Target network: ${targetClusters[0]}`
             : targetClusters.length == 0
-            ? ''
-            : `Multiple target networks detected ${targetClusters.join(' ')}`}
+              ? ''
+              : `Multiple target networks detected ${targetClusters.join(' ')}`}
         </h4>
       </div>
       <div className="col-span-3 my-2 space-y-4 bg-[#1E1B2F] p-4 lg:col-span-2">
@@ -549,10 +550,10 @@ export const Proposal = ({
                               {typeof instruction.args[key] === 'string'
                                 ? instruction.args[key]
                                 : instruction.args[key] instanceof Uint8Array
-                                ? instruction.args[key].toString('hex')
-                                : typeof instruction.args[key] === 'bigint'
-                                ? instruction.args[key].toString()
-                                : JSON.stringify(instruction.args[key])}
+                                  ? instruction.args[key].toString()
+                                  : typeof instruction.args[key] === 'bigint'
+                                    ? instruction.args[key].toString()
+                                    : JSON.stringify(instruction.args[key])}
                             </div>
                           )}
                         </div>

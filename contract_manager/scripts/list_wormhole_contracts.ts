@@ -1,6 +1,7 @@
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
-import { DefaultStore, EvmWormholeContract } from "../src";
+import { DefaultStore } from "../src/node/utils/store";
+import { EvmWormholeContract } from "../src/core/contracts";
 
 const parser = yargs(hideBin(process.argv))
   .usage("Usage: $0")
@@ -14,7 +15,12 @@ const parser = yargs(hideBin(process.argv))
 
 async function main() {
   const argv = await parser.argv;
-  const entries = [];
+  const entries: {
+    chain: string;
+    contract: string;
+    guardianSetIndex: number;
+    chainId: number;
+  }[] = [];
   for (const contract of Object.values(DefaultStore.wormhole_contracts)) {
     if (
       contract instanceof EvmWormholeContract &&

@@ -94,6 +94,13 @@ interface IPyth is IPythEvents {
         bytes[] calldata updateData
     ) external view returns (uint feeAmount);
 
+    /// @notice Returns the required fee to update a TWAP price.
+    /// @param updateData Array of price update data.
+    /// @return feeAmount The required fee in Wei.
+    function getTwapUpdateFee(
+        bytes[] calldata updateData
+    ) external view returns (uint feeAmount);
+
     /// @notice Parse `updateData` and return price feeds of the given `priceIds` if they are all published
     /// within `minPublishTime` and `maxPublishTime`.
     ///
@@ -118,6 +125,69 @@ interface IPyth is IPythEvents {
         uint64 minPublishTime,
         uint64 maxPublishTime
     ) external payable returns (PythStructs.PriceFeed[] memory priceFeeds);
+
+    /// @notice Parse `updateData` and return price feeds of the given `priceIds` if they are all published
+    /// within `minPublishTime` and `maxPublishTime,` but choose to store price updates if `storeUpdatesIfFresh`.
+    ///
+    /// You can use this method if you want to use a Pyth price at a fixed time and not the most recent price;
+    /// otherwise, please consider using `updatePriceFeeds`. This method may store the price updates on-chain, if they
+    /// are more recent than the current stored prices.
+    ///
+    /// This method requires the caller to pay a fee in wei; the required fee can be computed by calling
+    /// `getUpdateFee` with the length of the `updateData` array.
+    ///
+    /// This method will eventually allow the caller to determine whether parsed price feeds should update
+    /// the stored values as well.
+    ///
+    /// @dev Reverts if the transferred fee is not sufficient or the updateData is invalid or there is
+    /// no update for any of the given `priceIds` within the given time range.
+    /// @param updateData Array of price update data.
+    /// @param priceIds Array of price ids.
+    /// @param minAllowedPublishTime minimum acceptable publishTime for the given `priceIds`.
+    /// @param maxAllowedPublishTime maximum acceptable publishTime for the given `priceIds`.
+    /// @param storeUpdatesIfFresh flag for the parse function to
+    /// @return priceFeeds Array of the price feeds corresponding to the given `priceIds` (with the same order).
+    function parsePriceFeedUpdatesWithConfig(
+        bytes[] calldata updateData,
+        bytes32[] calldata priceIds,
+        uint64 minAllowedPublishTime,
+        uint64 maxAllowedPublishTime,
+        bool checkUniqueness,
+        bool checkUpdateDataIsMinimal,
+        bool storeUpdatesIfFresh
+    )
+        external
+        payable
+        returns (
+            PythStructs.PriceFeed[] memory priceFeeds,
+            uint64[] memory slots
+        );
+
+    /// @notice Parse time-weighted average price (TWAP) from two consecutive price updates for the given `priceIds`.
+    ///
+    /// This method calculates TWAP between two data points by processing the difference in cumulative price values
+    /// divided by the time period. It requires exactly two updates that contain valid price information
+    /// for all the requested price IDs.
+    ///
+    /// This method requires the caller to pay a fee in wei; the required fee can be computed by calling
+    /// `getUpdateFee` with the updateData array.
+    ///
+    /// @dev Reverts if:
+    /// - The transferred fee is not sufficient
+    /// - The updateData is invalid or malformed
+    /// - The updateData array does not contain exactly 2 updates
+    /// - There is no update for any of the given `priceIds`
+    /// - The time ordering between data points is invalid (start time must be before end time)
+    /// @param updateData Array containing exactly two price updates (start and end points for TWAP calculation)
+    /// @param priceIds Array of price ids to calculate TWAP for
+    /// @return twapPriceFeeds Array of TWAP price feeds corresponding to the given `priceIds` (with the same order)
+    function parseTwapPriceFeedUpdates(
+        bytes[] calldata updateData,
+        bytes32[] calldata priceIds
+    )
+        external
+        payable
+        returns (PythStructs.TwapPriceFeed[] memory twapPriceFeeds);
 
     /// @notice Similar to `parsePriceFeedUpdates` but ensures the updates returned are
     /// the first updates published in minPublishTime. That is, if there are multiple updates for a given timestamp,

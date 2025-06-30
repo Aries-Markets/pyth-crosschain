@@ -1,8 +1,7 @@
 "use client";
 
+import type { ReactNode, RefObject } from "react";
 import {
-  type ReactNode,
-  type MutableRefObject,
   createContext,
   useContext,
   useState,
@@ -17,7 +16,7 @@ import type { SupportedLanguage } from "./supported-language";
 import { getLogger } from "../../browser-logger";
 
 const HighlighterContext = createContext<
-  undefined | MutableRefObject<undefined | Highlighter>
+  undefined | RefObject<undefined | Highlighter>
 >(undefined);
 
 export const HighlighterProvider = ({
@@ -25,7 +24,7 @@ export const HighlighterProvider = ({
 }: {
   children: ReactNode | ReactNode[];
 }) => {
-  const highlighterRef = useRef<undefined | Highlighter>();
+  const highlighterRef = useRef<undefined | Highlighter>(undefined);
   return (
     <HighlighterContext.Provider value={highlighterRef}>
       {children}
@@ -48,7 +47,7 @@ const useHighlighter = () => {
 export const useHighlightedCode = (
   language: SupportedLanguage | undefined,
   code: string,
-  dimRange?: readonly [OffsetOrPosition, OffsetOrPosition] | undefined,
+  dimRange?: readonly [OffsetOrPosition, OffsetOrPosition],
 ) => {
   const highlighter = useHighlighter();
   const decorations = useMemo(

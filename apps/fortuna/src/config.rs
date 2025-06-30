@@ -1,38 +1,19 @@
 use {
     crate::{
         api::ChainId,
-        chain::reader::{
-            BlockNumber,
-            BlockStatus,
-        },
+        chain::reader::{BlockNumber, BlockStatus},
+        eth_utils::utils::EscalationPolicy,
     },
-    anyhow::{
-        anyhow,
-        Result,
-    },
-    clap::{
-        crate_authors,
-        crate_description,
-        crate_name,
-        crate_version,
-        Args,
-        Parser,
-    },
+    anyhow::{anyhow, Result},
+    clap::{crate_authors, crate_description, crate_name, crate_version, Args, Parser},
     ethers::types::Address,
-    std::{
-        collections::HashMap,
-        fs,
-    },
+    std::{collections::HashMap, fs},
 };
 pub use {
-    generate::GenerateOptions,
-    get_request::GetRequestOptions,
-    inspect::InspectOptions,
-    register_provider::RegisterProviderOptions,
-    request_randomness::RequestRandomnessOptions,
-    run::RunOptions,
-    setup_provider::SetupProviderOptions,
-    withdraw_fees::WithdrawFeesOptions,
+    generate::GenerateOptions, get_request::GetRequestOptions, inspect::InspectOptions,
+    prometheus_client::metrics::histogram::Histogram, register_provider::RegisterProviderOptions,
+    request_randomness::RequestRandomnessOptions, run::RunOptions,
+    setup_provider::SetupProviderOptions, withdraw_fees::WithdrawFeesOptions,
 };
 
 mod generate;
@@ -45,7 +26,6 @@ mod setup_provider;
 mod withdraw_fees;
 
 const DEFAULT_RPC_ADDR: &str = "127.0.0.1:34000";
-const DEFAULT_HTTP_ADDR: &str = "http://127.0.0.1:34000";
 
 #[derive(Parser, Debug)]
 #[command(name = crate_name!())]
@@ -93,9 +73,9 @@ pub struct ConfigOptions {
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Config {
-    pub chains:   HashMap<ChainId, EthereumConfig>,
+    pub chains: HashMap<ChainId, EthereumConfig>,
     pub provider: ProviderConfig,
-    pub keeper:   KeeperConfig,
+    pub keeper: KeeperConfig,
 }
 
 impl Config {
@@ -114,14 +94,31 @@ impl Config {
             }
         }
 
+        if let Some(replica_config) = &config.keeper.replica_config {
+            if replica_config.total_replicas == 0 {
+                return Err(anyhow!("Keeper replica configuration is invalid. total_replicas must be greater than 0."));
+            }
+            if config.keeper.private_key.load()?.is_none() {
+                return Err(anyhow!(
+                    "Keeper replica configuration requires a keeper private key to be specified."
+                ));
+            }
+            if replica_config.replica_id >= replica_config.total_replicas {
+                return Err(anyhow!("Keeper replica configuration is invalid. replica_id must be less than total_replicas."));
+            }
+            if replica_config.backup_delay_seconds == 0 {
+                return Err(anyhow!("Keeper replica configuration is invalid. backup_delay_seconds must be greater than 0 to prevent race conditions."));
+            }
+        }
+
         Ok(config)
     }
 
     pub fn get_chain_config(&self, chain_id: &ChainId) -> Result<EthereumConfig> {
-        self.chains
-            .get(chain_id)
-            .map(|x| x.clone())
-            .ok_or(anyhow!("Could not find chain id {} in the configuration", &chain_id).into())
+        self.chains.get(chain_id).cloned().ok_or(anyhow!(
+            "Could not find chain id {} in the configuration",
+            &chain_id
+        ))
     }
 }
 
@@ -130,9 +127,6 @@ pub struct EthereumConfig {
     /// URL of a Geth RPC endpoint to use for interacting with the blockchain.
     /// TODO: Change type from String to Url
     pub geth_rpc_addr: String,
-
-    /// URL of a Geth RPC wss endpoint to use for subscribing to blockchain events.
-    pub geth_rpc_wss: Option<String>,
 
     /// Address of a Pyth Randomness contract to interact with.
     pub contract_addr: Address,
@@ -148,6 +142,10 @@ pub struct EthereumConfig {
     #[serde(default)]
     pub confirmed_block_status: BlockStatus,
 
+    /// The number of blocks to look back for events that might be missed when starting the keeper
+    #[serde(default = "default_backlog_range")]
+    pub backlog_range: u64,
+
     /// Use the legacy transaction format (for networks without EIP 1559)
     #[serde(default)]
     pub legacy_tx: bool,
@@ -155,21 +153,32 @@ pub struct EthereumConfig {
     /// The gas limit to use for entropy callback transactions.
     pub gas_limit: u64,
 
+    /// The percentage multiplier to apply to priority fee estimates (100 = no change, e.g. 150 = 150% of base fee)
+    #[serde(default = "default_priority_fee_multiplier_pct")]
+    pub priority_fee_multiplier_pct: u64,
+
+    /// The escalation policy governs how the gas limit and fee are increased during backoff retries.
+    #[serde(default)]
+    pub escalation_policy: EscalationPolicyConfig,
+
     /// The minimum percentage profit to earn as a function of the callback cost.
-    /// For example, 20 means a profit of 20% over the cost of the callback.
+    /// For example, 20 means a profit of 20% over the cost of a callback that uses the full gas limit.
     /// The fee will be raised if the profit is less than this number.
-    pub min_profit_pct: u64,
+    /// The minimum value for this is -100. If set to < 0, it means the keeper may lose money on callbacks that use the full gas limit.
+    pub min_profit_pct: i64,
 
     /// The target percentage profit to earn as a function of the callback cost.
-    /// For example, 20 means a profit of 20% over the cost of the callback.
+    /// For example, 20 means a profit of 20% over the cost of a callback that uses the full gas limit.
     /// The fee will be set to this target whenever it falls outside the min/max bounds.
-    pub target_profit_pct: u64,
+    /// The minimum value for this is -100. If set to < 0, it means the keeper may lose money on callbacks that use the full gas limit.
+    pub target_profit_pct: i64,
 
     /// The maximum percentage profit to earn as a function of the callback cost.
-    /// For example, 100 means a profit of 100% over the cost of the callback.
+    /// For example, 100 means a profit of 100% over the cost of a callback that uses the full gas limit.
     /// The fee will be lowered if it is more profitable than specified here.
     /// Must be larger than min_profit_pct.
-    pub max_profit_pct: u64,
+    /// The minimum value for this is -100. If set to < 0, it means the keeper may lose money on callbacks that use the full gas limit.
+    pub max_profit_pct: i64,
 
     /// Minimum wallet balance for the keeper. If the balance falls below this level, the keeper will
     /// withdraw fees from the contract to top up. This functionality requires the keeper to be the fee
@@ -181,14 +190,118 @@ pub struct EthereumConfig {
     #[serde(default)]
     pub fee: u128,
 
+    /// Only set the provider's fee when the provider is registered for the first time. Default is true.
+    /// This is useful to avoid resetting the fees on service restarts.
+    #[serde(default = "default_sync_fee_only_on_register")]
+    pub sync_fee_only_on_register: bool,
+
     /// Historical commitments made by the provider.
     pub commitments: Option<Vec<Commitment>>,
 
     /// Maximum number of hashes to record in a request.
     /// This should be set according to the maximum gas limit the provider supports for callbacks.
     pub max_num_hashes: Option<u32>,
+
+    /// A list of delays (in blocks) that indicates how many blocks should be delayed
+    /// before we process a block. For retry logic, we can process blocks multiple times
+    /// at each specified delay. For example: [5, 10, 20].
+    #[serde(default = "default_block_delays")]
+    pub block_delays: Vec<u64>,
 }
 
+fn default_sync_fee_only_on_register() -> bool {
+    true
+}
+
+fn default_block_delays() -> Vec<u64> {
+    vec![5]
+}
+
+fn default_priority_fee_multiplier_pct() -> u64 {
+    100
+}
+
+fn default_backlog_range() -> u64 {
+    1000
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct EscalationPolicyConfig {
+    // The keeper will perform the callback as long as the tx is within this percentage of the configured gas limit.
+    // Default value is 110, meaning a 10% tolerance over the configured value.
+    #[serde(default = "default_gas_limit_tolerance_pct")]
+    pub gas_limit_tolerance_pct: u64,
+
+    /// The initial gas multiplier to apply to the tx gas estimate
+    #[serde(default = "default_initial_gas_multiplier_pct")]
+    pub initial_gas_multiplier_pct: u64,
+
+    /// The gas multiplier to apply to the tx gas estimate during backoff retries.
+    /// The gas on each successive retry is multiplied by this value, with the maximum multiplier capped at `gas_multiplier_cap_pct`.
+    #[serde(default = "default_gas_multiplier_pct")]
+    pub gas_multiplier_pct: u64,
+    /// The maximum gas multiplier to apply to the tx gas estimate during backoff retries.
+    #[serde(default = "default_gas_multiplier_cap_pct")]
+    pub gas_multiplier_cap_pct: u64,
+
+    /// The fee multiplier to apply to the fee during backoff retries.
+    /// The initial fee is 100% of the estimate (which itself may be padded based on our chain configuration)
+    /// The fee on each successive retry is multiplied by this value, with the maximum multiplier capped at `fee_multiplier_cap_pct`.
+    #[serde(default = "default_fee_multiplier_pct")]
+    pub fee_multiplier_pct: u64,
+    #[serde(default = "default_fee_multiplier_cap_pct")]
+    pub fee_multiplier_cap_pct: u64,
+}
+
+fn default_gas_limit_tolerance_pct() -> u64 {
+    110
+}
+
+fn default_initial_gas_multiplier_pct() -> u64 {
+    125
+}
+
+fn default_gas_multiplier_pct() -> u64 {
+    110
+}
+
+fn default_gas_multiplier_cap_pct() -> u64 {
+    600
+}
+
+fn default_fee_multiplier_pct() -> u64 {
+    110
+}
+
+fn default_fee_multiplier_cap_pct() -> u64 {
+    200
+}
+
+impl Default for EscalationPolicyConfig {
+    fn default() -> Self {
+        Self {
+            gas_limit_tolerance_pct: default_gas_limit_tolerance_pct(),
+            initial_gas_multiplier_pct: default_initial_gas_multiplier_pct(),
+            gas_multiplier_pct: default_gas_multiplier_pct(),
+            gas_multiplier_cap_pct: default_gas_multiplier_cap_pct(),
+            fee_multiplier_pct: default_fee_multiplier_pct(),
+            fee_multiplier_cap_pct: default_fee_multiplier_cap_pct(),
+        }
+    }
+}
+
+impl EscalationPolicyConfig {
+    pub fn to_policy(&self) -> EscalationPolicy {
+        EscalationPolicy {
+            gas_limit_tolerance_pct: self.gas_limit_tolerance_pct,
+            initial_gas_multiplier_pct: self.initial_gas_multiplier_pct,
+            gas_multiplier_pct: self.gas_multiplier_pct,
+            gas_multiplier_cap_pct: self.gas_multiplier_cap_pct,
+            fee_multiplier_pct: self.fee_multiplier_pct,
+            fee_multiplier_cap_pct: self.fee_multiplier_cap_pct,
+        }
+    }
+}
 
 /// A commitment that the provider used to generate random numbers at some point in the past.
 /// These historical commitments need to be stored in the configuration to support transition points where
@@ -196,8 +309,8 @@ pub struct EthereumConfig {
 /// is hard to retrieve from there.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Commitment {
-    pub seed:                                [u8; 32],
-    pub chain_length:                        u64,
+    pub seed: [u8; 32],
+    pub chain_length: u64,
     pub original_commitment_sequence_number: u64,
 }
 
@@ -237,6 +350,29 @@ fn default_chain_sample_interval() -> u64 {
     1
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub struct RunConfig {
+    /// Disable automatic fee adjustment threads
+    #[serde(default)]
+    pub disable_fee_adjustment: bool,
+
+    /// Disable automatic fee withdrawal threads
+    #[serde(default)]
+    pub disable_fee_withdrawal: bool,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ReplicaConfig {
+    pub replica_id: u64,
+    pub total_replicas: u64,
+    #[serde(default = "default_backup_delay_seconds")]
+    pub backup_delay_seconds: u64,
+}
+
+fn default_backup_delay_seconds() -> u64 {
+    30
+}
+
 /// Configuration values for the keeper service that are shared across chains.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct KeeperConfig {
@@ -246,6 +382,13 @@ pub struct KeeperConfig {
     /// This key *does not need to be a registered provider*. In particular, production deployments
     /// should ensure this is a different key in order to reduce the severity of security breaches.
     pub private_key: SecretString,
+
+    #[serde(default)]
+    pub replica_config: Option<ReplicaConfig>,
+
+    /// Runtime configuration for the keeper service
+    #[serde(default)]
+    pub run_config: RunConfig,
 }
 
 // A secret is a string that can be provided either as a literal in the config,
@@ -261,18 +404,20 @@ pub struct SecretString {
 
 impl SecretString {
     pub fn load(&self) -> Result<Option<String>> {
-        match &self.value {
-            Some(v) => return Ok(Some(v.clone())),
-            _ => {}
+        if let Some(v) = &self.value {
+            return Ok(Some(v.clone()));
         }
 
-        match &self.file {
-            Some(v) => {
-                return Ok(Some(fs::read_to_string(v)?.trim().to_string()));
-            }
-            _ => {}
+        if let Some(v) = &self.file {
+            return Ok(Some(fs::read_to_string(v)?.trim().to_string()));
         }
 
         Ok(None)
     }
 }
+
+/// This is a histogram with a bucket configuration appropriate for most things
+/// which measure latency to external services.
+pub const LATENCY_BUCKETS: [f64; 11] = [
+    0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0,
+];

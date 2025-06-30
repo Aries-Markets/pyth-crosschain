@@ -1,39 +1,20 @@
 use {
     crate::{
         api::{
-            rest::{
-                verify_price_ids_exist,
-                RestError,
-            },
-            types::{
-                BinaryPriceUpdate,
-                EncodingType,
-                ParsedPriceUpdate,
-                PriceIdInput,
-                PriceUpdate,
-            },
+            rest::{validate_price_ids, RestError},
+            types::{BinaryUpdate, EncodingType, ParsedPriceUpdate, PriceIdInput, PriceUpdate},
             ApiState,
         },
-        state::aggregate::{
-            Aggregates,
-            RequestTime,
-        },
+        state::aggregate::{Aggregates, RequestTime},
     },
     anyhow::Result,
-    axum::{
-        extract::State,
-        Json,
-    },
-    base64::{
-        engine::general_purpose::STANDARD as base64_standard_engine,
-        Engine as _,
-    },
+    axum::{extract::State, Json},
+    base64::{engine::general_purpose::STANDARD as base64_standard_engine, Engine as _},
     pyth_sdk::PriceIdentifier,
     serde::Deserialize,
     serde_qs::axum::QsQuery,
     utoipa::IntoParams,
 };
-
 
 #[derive(Debug, Deserialize, IntoParams)]
 #[into_params(parameter_in=Query)]
@@ -57,6 +38,10 @@ pub struct LatestPriceUpdatesQueryParams {
     /// If true, include the parsed price update in the `parsed` field of each returned feed. Default is `true`.
     #[serde(default = "default_true")]
     parsed: bool,
+
+    /// If true, invalid price IDs in the `ids` parameter are ignored. Only applicable to the v2 APIs. Default is `false`.
+    #[serde(default)]
+    ignore_invalid_price_ids: bool,
 }
 
 fn default_true() -> bool {
@@ -84,8 +69,10 @@ pub async fn latest_price_updates<S>(
 where
     S: Aggregates,
 {
-    let price_ids: Vec<PriceIdentifier> = params.ids.into_iter().map(|id| id.into()).collect();
-    verify_price_ids_exist(&state, &price_ids).await?;
+    let price_id_inputs: Vec<PriceIdentifier> =
+        params.ids.into_iter().map(|id| id.into()).collect();
+    let price_ids: Vec<PriceIdentifier> =
+        validate_price_ids(&state, &price_id_inputs, params.ignore_invalid_price_ids).await?;
 
     let state = &*state.state;
     let price_feeds_with_update_data =
@@ -108,9 +95,9 @@ where
             EncodingType::Hex => hex::encode(data),
         })
         .collect();
-    let binary_price_update = BinaryPriceUpdate {
+    let binary_price_update = BinaryUpdate {
         encoding: params.encoding,
-        data:     encoded_data,
+        data: encoded_data,
     };
     let parsed_price_updates: Option<Vec<ParsedPriceUpdate>> = if params.parsed {
         Some(
@@ -128,7 +115,6 @@ where
         binary: binary_price_update,
         parsed: parsed_price_updates,
     };
-
 
     Ok(Json(compressed_price_update))
 }
